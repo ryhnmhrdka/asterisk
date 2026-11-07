@@ -56,6 +56,7 @@ pub struct App {
     pub patches: Vec<HardeningPatch>,
     pub logs: Vec<DynamicLogEntry>,
     pub chat_messages: Vec<ChatMessage>,
+    pub chat_scroll: usize,
     pub skills: SkillRegistry,
 
     pub selected_matrix_row: usize,
@@ -96,12 +97,8 @@ impl App {
             findings: Vec::new(),
             patches: Vec::new(),
             logs: Vec::new(),
-            chat_messages: vec![ChatMessage {
-                sender: "orchestrator".to_string(),
-                text: "autonomous code defense harness initialized.".to_string(),
-                is_user: false,
-                timestamp: Utc::now(),
-            }],
+            chat_messages: vec![ChatMessage::System("autonomous code defense harness initialized.".to_string())],
+            chat_scroll: 0,
             skills,
             selected_matrix_row: 0,
             selected_patch_row: 0,
@@ -139,23 +136,13 @@ impl App {
     }
 
     pub fn confirm_subagent_deployment(&mut self) {
-        self.chat_messages.push(ChatMessage {
-            sender: "user".to_string(),
-            text: "y (confirmed via click)".to_string(),
-            is_user: true,
-            timestamp: Utc::now(),
-        });
+        self.chat_messages.push(ChatMessage::User("y (confirmed via click)".to_string()));
         self.awaiting_confirmation = false;
         let _ = self.cmd_tx.send(EngineCommand::ConfirmDeploy);
     }
 
     pub fn cancel_subagent_deployment(&mut self) {
-        self.chat_messages.push(ChatMessage {
-            sender: "user".to_string(),
-            text: "deployment cancelled by user.".to_string(),
-            is_user: true,
-            timestamp: Utc::now(),
-        });
+        self.chat_messages.push(ChatMessage::User("deployment cancelled by user.".to_string()));
         self.awaiting_confirmation = false;
         self.is_running = false;
     }
@@ -168,12 +155,7 @@ impl App {
                 let state_str = if node.is_paused { "paused" } else { "resumed" };
                 self.action_msg = Some(format!("node {} {state_str}", node.id));
 
-                self.chat_messages.push(ChatMessage {
-                    sender: "system".to_string(),
-                    text: format!("node [{}] marked as {state_str}.", node.id),
-                    is_user: false,
-                    timestamp: Utc::now(),
-                });
+                self.chat_messages.push(ChatMessage::System(format!("node [{}] marked as {state_str}.", node.id)));
 
                 if node.is_paused {
                     let _ = self.cmd_tx.send(EngineCommand::PauseNode(node_id));
@@ -217,12 +199,7 @@ impl App {
             Ok(()) => {
                 let name = report_path.file_name().unwrap_or_default().to_string_lossy();
                 self.action_msg = Some(format!("report exported -> {name}"));
-                self.chat_messages.push(ChatMessage {
-                    sender: "system".to_string(),
-                    text: format!("security report written to {name}."),
-                    is_user: false,
-                    timestamp: Utc::now(),
-                });
+                self.chat_messages.push(ChatMessage::System(format!("security report written to {name}.")));
             }
             Err(e) => {
                 self.action_msg = Some(format!("export error: {e}"));
@@ -256,13 +233,8 @@ impl App {
                 EngineMessage::Log(l) => {
                     self.logs.push(l);
                 }
-                EngineMessage::Chat(text) => {
-                    self.chat_messages.push(ChatMessage {
-                        sender: "orchestrator".to_string(),
-                        text,
-                        is_user: false,
-                        timestamp: Utc::now(),
-                    });
+                EngineMessage::Chat(msg) => {
+                    self.chat_messages.push(msg);
                 }
                 EngineMessage::AwaitingConfirmation => {
                     self.awaiting_confirmation = true;
@@ -401,12 +373,7 @@ impl App {
         }
 
         if !input.is_empty() {
-            self.chat_messages.push(ChatMessage {
-                sender: "user".to_string(),
-                text: input.clone(),
-                is_user: true,
-                timestamp: Utc::now(),
-            });
+            self.chat_messages.push(ChatMessage::User(input.clone()));
 
             if input == "/pause" || input == "pause" {
                 self.toggle_pause_selected_node();
@@ -419,11 +386,9 @@ impl App {
             } else if input == "/scan" || input == "scan" {
                 self.trigger_audit();
             } else {
-                self.chat_messages.push(ChatMessage {
+                self.chat_messages.push(ChatMessage::Agent {
                     sender: "orchestrator".to_string(),
                     text: format!("command received: '{input}'. use /apply, /rollback, /pause, or click action buttons."),
-                    is_user: false,
-                    timestamp: Utc::now(),
                 });
             }
         }
@@ -435,11 +400,9 @@ impl App {
             match AutoHardeningAgent::apply_patch(patch) {
                 Ok(()) => {
                     self.action_msg = Some(format!("applied patch {}", patch.id));
-                    self.chat_messages.push(ChatMessage {
-                        sender: "patcher".to_string(),
+                    self.chat_messages.push(ChatMessage::Agent {
+                        sender: "auto_hardening".to_string(),
                         text: format!("applied hardening patch {} to disk.", patch.id),
-                        is_user: false,
-                        timestamp: Utc::now(),
                     });
                     if let Some(f) = self.findings.iter_mut().find(|f| f.id == finding_id) {
                         f.patched = true;
@@ -459,11 +422,9 @@ impl App {
             match AutoHardeningAgent::rollback_patch(patch) {
                 Ok(()) => {
                     self.action_msg = Some(format!("rolled back {}", patch.id));
-                    self.chat_messages.push(ChatMessage {
-                        sender: "patcher".to_string(),
+                    self.chat_messages.push(ChatMessage::Agent {
+                        sender: "auto_hardening".to_string(),
                         text: format!("rolled back patch {}.", patch.id),
-                        is_user: false,
-                        timestamp: Utc::now(),
                     });
                     if let Some(f) = self.findings.iter_mut().find(|f| f.id == finding_id) {
                         f.patched = false;
@@ -481,6 +442,20 @@ impl App {
         let col = mouse.column;
         let row = mouse.row;
         let is_left_click = matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left));
+
+        // Scroll handlers (inspired by SynapsCLI's mouse wheel scrolling)
+        if matches!(mouse.kind, MouseEventKind::ScrollUp) {
+            if self.chat_scroll < self.chat_messages.len().saturating_sub(2) {
+                self.chat_scroll += 1;
+            }
+            return;
+        }
+        if matches!(mouse.kind, MouseEventKind::ScrollDown) {
+            if self.chat_scroll > 0 {
+                self.chat_scroll -= 1;
+            }
+            return;
+        }
 
         // 1. Welcome Screen Clicks
         if self.mode == AppMode::Welcome {
@@ -538,6 +513,15 @@ impl App {
                 if let Some(btn_send) = sidebar_targets.btn_send {
                     if in_rect(btn_send, col, row) {
                         self.submit_prompt_input();
+                        return;
+                    }
+                }
+
+                // Subagent Tray row clicks (focusing subagent)
+                for (node_id, row_rect) in &sidebar_targets.subagent_rows {
+                    if in_rect(*row_rect, col, row) {
+                        self.selected_node_id = Some(node_id.clone());
+                        self.action_msg = Some(format!("focused subagent {node_id}"));
                         return;
                     }
                 }
@@ -659,6 +643,8 @@ impl App {
             f,
             main_chunks[0],
             &self.chat_messages,
+            self.chat_scroll,
+            &self.nodes_info,
             sel_node,
             &self.prompt_input,
             self.awaiting_confirmation,

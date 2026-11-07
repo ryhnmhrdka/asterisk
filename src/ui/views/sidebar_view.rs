@@ -1,4 +1,4 @@
-use crate::types::{ChatMessage, SproutedNodeInfo};
+use crate::types::{AgentStatus, ChatMessage, SproutedNodeInfo};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -13,6 +13,7 @@ pub struct SidebarClickTargets {
     pub btn_pause: Option<Rect>,
     pub btn_apply: Option<Rect>,
     pub btn_send: Option<Rect>,
+    pub subagent_rows: Vec<(String, Rect)>,
 }
 
 pub struct SidebarView;
@@ -22,6 +23,8 @@ impl SidebarView {
         f: &mut Frame,
         area: Rect,
         chat_messages: &[ChatMessage],
+        chat_scroll: usize,
+        nodes_info: &std::collections::HashMap<String, SproutedNodeInfo>,
         selected_node: Option<&SproutedNodeInfo>,
         prompt_input: &str,
         awaiting_confirmation: bool,
@@ -29,10 +32,11 @@ impl SidebarView {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(8),
-                Constraint::Length(awaiting_confirmation.then_some(3).unwrap_or(0)),
-                Constraint::Length(7),
-                Constraint::Length(3),
+                Constraint::Length(5),                                     // 1. Subagent Tray (inspired by SynapsCLI)
+                Constraint::Min(8),                                        // 2. Chatbot Message Stream
+                Constraint::Length(awaiting_confirmation.then_some(3).unwrap_or(0)), // 3. Confirmation Buttons
+                Constraint::Length(6),                                     // 4. Node Inspector Box
+                Constraint::Length(3),                                     // 5. Input Prompt Row
             ])
             .split(area);
 
@@ -42,52 +46,126 @@ impl SidebarView {
             btn_pause: None,
             btn_apply: None,
             btn_send: None,
+            subagent_rows: Vec::new(),
         };
 
-        // 1. Chatbot Conversation History (Chat Bubbles style)
+        // 1. Subagent Tray (inspired by SynapsCLI's subagent_tray.rs)
+        let tray_block = Block::default()
+            .borders(Borders::BOTTOM | Borders::RIGHT)
+            .border_type(BorderType::Plain)
+            .border_style(Style::default().fg(Color::DarkGray));
+
+        let mut tray_lines = Vec::new();
+        tray_lines.push(Line::from(vec![
+            Span::styled("subagents crew: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("(click row to focus node)", Style::default().fg(Color::Rgb(80, 80, 80))),
+        ]));
+
+        let key_subagents = vec![
+            ("sub_secret_backend", "secret hunter", "backend/server.py"),
+            ("sub_sast_backend", "sast analyzer", "backend/server.py"),
+            ("sub_sast_frontend", "sast analyzer", "frontend/api.js"),
+        ];
+
+        let tray_area = chunks[0];
+        let mut row_y = tray_area.y + 1;
+
+        for (id, name, target) in key_subagents {
+            let info = nodes_info.get(id);
+            let (status_icon, status_color) = match info.map(|n| (n.status, n.is_paused)) {
+                Some((_, true)) => ("⏸", Color::DarkGray),
+                Some((AgentStatus::Running, false)) => ("⠋", Color::White),
+                Some((AgentStatus::Success, false)) => ("✔", Color::Gray),
+                _ => ("○", Color::DarkGray),
+            };
+
+            let row_rect = Rect::new(tray_area.x, row_y, tray_area.width, 1);
+            targets.subagent_rows.push((id.to_string(), row_rect));
+
+            tray_lines.push(Line::from(vec![
+                Span::styled(format!(" {status_icon} "), Style::default().fg(status_color)),
+                Span::styled(format!("{name:14}"), Style::default().fg(Color::White)),
+                Span::styled(format!(" {target}"), Style::default().fg(Color::DarkGray)),
+            ]));
+            row_y += 1;
+        }
+
+        f.render_widget(Paragraph::new(tray_lines).block(tray_block), tray_area);
+
+        // 2. Chatbot Message Stream (Chat Bubbles style)
         let chat_block = Block::default()
             .borders(Borders::RIGHT)
             .border_type(BorderType::Plain)
             .border_style(Style::default().fg(Color::DarkGray));
 
         let mut chat_lines = Vec::new();
-        let skip_count = chat_messages.len().saturating_sub(6);
+        let total_msgs = chat_messages.len();
+        let start_idx = total_msgs.saturating_sub(10 + chat_scroll);
+        let end_idx = total_msgs.saturating_sub(chat_scroll);
 
-        for msg in chat_messages.iter().skip(skip_count) {
-            if msg.is_user {
-                // User chat bubble (right indented, bold white)
-                chat_lines.push(Line::from(vec![
-                    Span::raw("   "),
-                    Span::styled("┌─ you ────────────────────────┐", Style::default().fg(Color::White)),
-                ]));
-                chat_lines.push(Line::from(vec![
-                    Span::raw("   "),
-                    Span::styled("│ ", Style::default().fg(Color::White)),
-                    Span::styled(&msg.text, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                ]));
-                chat_lines.push(Line::from(vec![
-                    Span::raw("   "),
-                    Span::styled("└──────────────────────────────┘", Style::default().fg(Color::White)),
-                ]));
-            } else {
-                // Agent chat bubble (classic dark gray frame, white text)
-                chat_lines.push(Line::from(Span::styled(format!("┌─ {} ──────────────────────", msg.sender), Style::default().fg(Color::DarkGray))));
-                for line in msg.text.lines() {
+        for msg in &chat_messages[start_idx..end_idx] {
+            match msg {
+                ChatMessage::User(text) => {
                     chat_lines.push(Line::from(vec![
-                        Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-                        Span::styled(line, Style::default().fg(Color::Gray)),
+                        Span::raw("   "),
+                        Span::styled("┌─ you ────────────────────────┐", Style::default().fg(Color::White)),
+                    ]));
+                    chat_lines.push(Line::from(vec![
+                        Span::raw("   "),
+                        Span::styled("│ ", Style::default().fg(Color::White)),
+                        Span::styled(text, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    ]));
+                    chat_lines.push(Line::from(vec![
+                        Span::raw("   "),
+                        Span::styled("└──────────────────────────────┘", Style::default().fg(Color::White)),
                     ]));
                 }
-                chat_lines.push(Line::from(Span::styled("└──────────────────────────────", Style::default().fg(Color::DarkGray))));
+                ChatMessage::Thinking { agent, thought } => {
+                    chat_lines.push(Line::from(vec![
+                        Span::styled(format!("⠋ [{agent} thinking]: "), Style::default().fg(Color::DarkGray)),
+                        Span::styled(thought, Style::default().fg(Color::Rgb(140, 140, 140)).add_modifier(Modifier::ITALIC)),
+                    ]));
+                }
+                ChatMessage::ToolCall { agent: _agent, tool, input } => {
+                    chat_lines.push(Line::from(vec![
+                        Span::styled("❯ tool call: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(format!("{tool} "), Style::default().fg(Color::White)),
+                        Span::styled(format!("({input})"), Style::default().fg(Color::DarkGray)),
+                    ]));
+                }
+                ChatMessage::ToolResult { output, elapsed_ms, .. } => {
+                    let ms_str = elapsed_ms.map(|ms| format!(" ({ms}ms)")).unwrap_or_default();
+                    chat_lines.push(Line::from(vec![
+                        Span::styled("  ✔ result: ", Style::default().fg(Color::Gray)),
+                        Span::styled(output, Style::default().fg(Color::White)),
+                        Span::styled(ms_str, Style::default().fg(Color::DarkGray)),
+                    ]));
+                }
+                ChatMessage::Agent { sender, text } => {
+                    chat_lines.push(Line::from(Span::styled(format!("┌─ {sender} ──────────────────────"), Style::default().fg(Color::DarkGray))));
+                    for line in text.lines() {
+                        chat_lines.push(Line::from(vec![
+                            Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+                            Span::styled(line, Style::default().fg(Color::Gray)),
+                        ]));
+                    }
+                    chat_lines.push(Line::from(Span::styled("└──────────────────────────────", Style::default().fg(Color::DarkGray))));
+                }
+                ChatMessage::System(text) => {
+                    chat_lines.push(Line::from(vec![
+                        Span::styled("● system: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(text, Style::default().fg(Color::White)),
+                    ]));
+                }
             }
             chat_lines.push(Line::raw(""));
         }
 
-        f.render_widget(Paragraph::new(chat_lines).block(chat_block), chunks[0]);
+        f.render_widget(Paragraph::new(chat_lines).block(chat_block), chunks[1]);
 
-        // 2. Clickable Confirmation Buttons (When Awaiting Confirmation)
+        // 3. Clickable Confirmation Buttons (When Awaiting Confirmation)
         if awaiting_confirmation {
-            let confirm_area = chunks[1];
+            let confirm_area = chunks[2];
             let btn_split = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
@@ -115,7 +193,7 @@ impl SidebarView {
             targets.btn_cancel = Some(btn_canc_rect);
         }
 
-        // 3. Selected Node Inspector with Clickable Action Buttons
+        // 4. Selected Node Inspector with Clickable Action Buttons
         let node_block = Block::default()
             .borders(Borders::TOP | Borders::RIGHT)
             .border_type(BorderType::Plain)
@@ -134,10 +212,6 @@ impl SidebarView {
                     Span::styled(node.target_path.as_deref().unwrap_or("-"), Style::default().fg(Color::White)),
                 ]),
                 Line::from(vec![
-                    Span::styled("task:   ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(&node.label, Style::default().fg(Color::Gray)),
-                ]),
-                Line::from(vec![
                     Span::styled("actions: ", Style::default().fg(Color::DarkGray)),
                     Span::styled(if node.is_paused { " [ ▶ Resume ] " } else { " [ ⏸ Pause ] " }, Style::default().fg(Color::White).bg(Color::Rgb(40, 40, 40))),
                     Span::raw(" "),
@@ -151,18 +225,18 @@ impl SidebarView {
             ]
         };
 
-        let node_area = chunks[2];
+        let node_area = chunks[3];
         f.render_widget(Paragraph::new(node_lines).block(node_block), node_area);
 
         // Store action button rects inside the inspector box
-        let btn_y = node_area.y + 4;
+        let btn_y = node_area.y + 3;
         if btn_y < node_area.y + node_area.height {
             targets.btn_pause = Some(Rect::new(node_area.x + 9, btn_y, 14, 1));
             targets.btn_apply = Some(Rect::new(node_area.x + 24, btn_y, 16, 1));
         }
 
-        // 4. Interactive Chatbot Input Bar with Clickable [ Send ↵ ] Button
-        let prompt_row = chunks[3];
+        // 5. Interactive Chatbot Input Bar with Clickable [ Send ↵ ] Button
+        let prompt_row = chunks[4];
         let input_split = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([

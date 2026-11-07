@@ -95,12 +95,30 @@ pub struct WorkspaceProfile {
     pub has_mobile: bool,
 }
 
+/// Rich Chat Message model inspired by SynapsCLI
 #[derive(Debug, Clone)]
-pub struct ChatMessage {
-    pub sender: String,
-    pub text: String,
-    pub is_user: bool,
-    pub timestamp: DateTime<Utc>,
+pub enum ChatMessage {
+    User(String),
+    Thinking {
+        agent: String,
+        thought: String,
+    },
+    Agent {
+        sender: String,
+        text: String,
+    },
+    ToolCall {
+        agent: String,
+        tool: String,
+        input: String,
+    },
+    ToolResult {
+        agent: String,
+        tool: String,
+        output: String,
+        elapsed_ms: Option<u64>,
+    },
+    System(String),
 }
 
 #[derive(Debug, Clone)]

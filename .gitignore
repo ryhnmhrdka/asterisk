@@ -1,1 +1,4 @@
 /target
+/pkg
+/reference
+*.pkg.tar.zst

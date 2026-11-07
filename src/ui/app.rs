@@ -7,13 +7,14 @@ use crate::types::{
     VulnerabilityFinding, WorkspaceProfile,
 };
 use crate::ui::views::{
-    GraphView, LogsView, MatrixView, PatchView, SidebarView, SkillsView, WelcomeView,
+    GraphView, LogsView, MatrixView, PatchClickTargets, PatchView, SidebarClickTargets,
+    SidebarView, SkillsView, WelcomeView,
 };
 use chrono::Utc;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use rataflow::{Flow, FlowEvent, StepEdge, TextContent};
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, Tabs},
@@ -27,6 +28,15 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 pub enum AppMode {
     Welcome,
     Workspace,
+}
+
+#[derive(Default)]
+pub struct AppClickTargets {
+    pub welcome_btn: Option<Rect>,
+    pub tab_rects: Vec<(usize, Rect)>,
+    pub sidebar: Option<SidebarClickTargets>,
+    pub findings_table: Option<Rect>,
+    pub patches: Option<PatchClickTargets>,
 }
 
 pub struct App {
@@ -58,6 +68,8 @@ pub struct App {
     pub engine_tx: UnboundedSender<EngineMessage>,
     pub cmd_tx: UnboundedSender<EngineCommand>,
     pub cmd_rx: Option<UnboundedReceiver<EngineCommand>>,
+
+    pub click_targets: AppClickTargets,
 }
 
 impl App {
@@ -100,6 +112,7 @@ impl App {
             engine_tx: tx,
             cmd_tx,
             cmd_rx: Some(cmd_rx),
+            click_targets: AppClickTargets::default(),
         }
     }
 
@@ -123,6 +136,28 @@ impl App {
             let engine = ExecutionEngine::new(target, sender, cmd_rx);
             engine.run_autonomous_audit().await;
         });
+    }
+
+    pub fn confirm_subagent_deployment(&mut self) {
+        self.chat_messages.push(ChatMessage {
+            sender: "user".to_string(),
+            text: "y (confirmed via click)".to_string(),
+            is_user: true,
+            timestamp: Utc::now(),
+        });
+        self.awaiting_confirmation = false;
+        let _ = self.cmd_tx.send(EngineCommand::ConfirmDeploy);
+    }
+
+    pub fn cancel_subagent_deployment(&mut self) {
+        self.chat_messages.push(ChatMessage {
+            sender: "user".to_string(),
+            text: "deployment cancelled by user.".to_string(),
+            is_user: true,
+            timestamp: Utc::now(),
+        });
+        self.awaiting_confirmation = false;
+        self.is_running = false;
     }
 
     pub fn toggle_pause_selected_node(&mut self) {
@@ -231,7 +266,7 @@ impl App {
                 }
                 EngineMessage::AwaitingConfirmation => {
                     self.awaiting_confirmation = true;
-                    self.action_msg = Some("awaiting user confirmation in sidebar...".to_string());
+                    self.action_msg = Some("click [Deploy Subagents] or type 'y' in sidebar...".to_string());
                 }
                 EngineMessage::ScanFinished => {
                     self.is_running = false;
@@ -280,7 +315,6 @@ impl App {
     }
 
     fn handle_workspace_key(&mut self, key: KeyEvent) -> bool {
-        // Ctrl+C or Esc when input empty: quit
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return true;
         }
@@ -303,61 +337,7 @@ impl App {
             KeyCode::F(5) => self.current_tab = 4,
 
             KeyCode::Enter => {
-                let input = self.prompt_input.trim().to_string();
-                self.prompt_input.clear();
-
-                if self.awaiting_confirmation {
-                    if input.is_empty() || input.eq_ignore_ascii_case("y") || input.eq_ignore_ascii_case("yes") {
-                        self.chat_messages.push(ChatMessage {
-                            sender: "user".to_string(),
-                            text: if input.is_empty() { "y (confirmed)".to_string() } else { input },
-                            is_user: true,
-                            timestamp: Utc::now(),
-                        });
-                        self.awaiting_confirmation = false;
-                        let _ = self.cmd_tx.send(EngineCommand::ConfirmDeploy);
-                        return false;
-                    } else if input.eq_ignore_ascii_case("n") || input.eq_ignore_ascii_case("no") {
-                        self.chat_messages.push(ChatMessage {
-                            sender: "user".to_string(),
-                            text: "deployment cancelled by user.".to_string(),
-                            is_user: true,
-                            timestamp: Utc::now(),
-                        });
-                        self.awaiting_confirmation = false;
-                        self.is_running = false;
-                        return false;
-                    }
-                }
-
-                if !input.is_empty() {
-                    self.chat_messages.push(ChatMessage {
-                        sender: "user".to_string(),
-                        text: input.clone(),
-                        is_user: true,
-                        timestamp: Utc::now(),
-                    });
-
-                    // Command dispatch from chatbot prompt
-                    if input == "/pause" || input == "pause" {
-                        self.toggle_pause_selected_node();
-                    } else if input == "/apply" || input == "apply" || input == "a" {
-                        self.apply_current_patch();
-                    } else if input == "/rollback" || input == "rollback" || input == "r" {
-                        self.rollback_current_patch();
-                    } else if input == "/export" || input == "export" || input == "e" {
-                        self.export_security_report();
-                    } else if input == "/scan" || input == "scan" {
-                        self.trigger_audit();
-                    } else {
-                        self.chat_messages.push(ChatMessage {
-                            sender: "orchestrator".to_string(),
-                            text: format!("command received: '{input}'. use /apply, /rollback, /pause, or /export."),
-                            is_user: false,
-                            timestamp: Utc::now(),
-                        });
-                    }
-                }
+                self.submit_prompt_input();
             }
             KeyCode::Backspace => {
                 self.prompt_input.pop();
@@ -406,7 +386,50 @@ impl App {
         false
     }
 
-    fn apply_current_patch(&mut self) {
+    pub fn submit_prompt_input(&mut self) {
+        let input = self.prompt_input.trim().to_string();
+        self.prompt_input.clear();
+
+        if self.awaiting_confirmation {
+            if input.is_empty() || input.eq_ignore_ascii_case("y") || input.eq_ignore_ascii_case("yes") {
+                self.confirm_subagent_deployment();
+                return;
+            } else if input.eq_ignore_ascii_case("n") || input.eq_ignore_ascii_case("no") {
+                self.cancel_subagent_deployment();
+                return;
+            }
+        }
+
+        if !input.is_empty() {
+            self.chat_messages.push(ChatMessage {
+                sender: "user".to_string(),
+                text: input.clone(),
+                is_user: true,
+                timestamp: Utc::now(),
+            });
+
+            if input == "/pause" || input == "pause" {
+                self.toggle_pause_selected_node();
+            } else if input == "/apply" || input == "apply" || input == "a" {
+                self.apply_current_patch();
+            } else if input == "/rollback" || input == "rollback" || input == "r" {
+                self.rollback_current_patch();
+            } else if input == "/export" || input == "export" || input == "e" {
+                self.export_security_report();
+            } else if input == "/scan" || input == "scan" {
+                self.trigger_audit();
+            } else {
+                self.chat_messages.push(ChatMessage {
+                    sender: "orchestrator".to_string(),
+                    text: format!("command received: '{input}'. use /apply, /rollback, /pause, or click action buttons."),
+                    is_user: false,
+                    timestamp: Utc::now(),
+                });
+            }
+        }
+    }
+
+    pub fn apply_current_patch(&mut self) {
         if let Some(patch) = self.patches.get_mut(self.selected_patch_row) {
             let finding_id = patch.finding_id.clone();
             match AutoHardeningAgent::apply_patch(patch) {
@@ -430,7 +453,7 @@ impl App {
         }
     }
 
-    fn rollback_current_patch(&mut self) {
+    pub fn rollback_current_patch(&mut self) {
         if let Some(patch) = self.patches.get_mut(self.selected_patch_row) {
             let finding_id = patch.finding_id.clone();
             match AutoHardeningAgent::rollback_patch(patch) {
@@ -455,7 +478,112 @@ impl App {
     }
 
     pub fn handle_mouse(&mut self, mouse: MouseEvent) {
-        if self.mode == AppMode::Workspace && self.current_tab == 0 {
+        let col = mouse.column;
+        let row = mouse.row;
+        let is_left_click = matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left));
+
+        // 1. Welcome Screen Clicks
+        if self.mode == AppMode::Welcome {
+            if is_left_click {
+                if let Some(btn) = self.click_targets.welcome_btn {
+                    if in_rect(btn, col, row) {
+                        if !self.welcome_input.trim().is_empty() {
+                            self.target_dir = PathBuf::from(self.welcome_input.trim());
+                        }
+                        self.profile = WorkspaceScanner::scan(&self.target_dir);
+                        self.mode = AppMode::Workspace;
+                        self.trigger_audit();
+                    }
+                }
+            }
+            return;
+        }
+
+        // 2. Workspace Screen Clicks
+        if is_left_click {
+            // A. Tab clicks
+            for (tab_idx, rect) in &self.click_targets.tab_rects {
+                if in_rect(*rect, col, row) {
+                    self.current_tab = *tab_idx;
+                    return;
+                }
+            }
+
+            // B. Sidebar Chatbot Buttons
+            if let Some(sidebar_targets) = &self.click_targets.sidebar {
+                if let Some(btn_conf) = sidebar_targets.btn_confirm {
+                    if in_rect(btn_conf, col, row) {
+                        self.confirm_subagent_deployment();
+                        return;
+                    }
+                }
+                if let Some(btn_canc) = sidebar_targets.btn_cancel {
+                    if in_rect(btn_canc, col, row) {
+                        self.cancel_subagent_deployment();
+                        return;
+                    }
+                }
+                if let Some(btn_pause) = sidebar_targets.btn_pause {
+                    if in_rect(btn_pause, col, row) {
+                        self.toggle_pause_selected_node();
+                        return;
+                    }
+                }
+                if let Some(btn_apply) = sidebar_targets.btn_apply {
+                    if in_rect(btn_apply, col, row) {
+                        self.apply_current_patch();
+                        return;
+                    }
+                }
+                if let Some(btn_send) = sidebar_targets.btn_send {
+                    if in_rect(btn_send, col, row) {
+                        self.submit_prompt_input();
+                        return;
+                    }
+                }
+            }
+
+            // C. Tab 1: Findings Table row click
+            if self.current_tab == 1 {
+                if let Some(table_rect) = self.click_targets.findings_table {
+                    if in_rect(table_rect, col, row) {
+                        let clicked_idx = (row.saturating_sub(table_rect.y + 1)) as usize;
+                        if clicked_idx < self.findings.len() {
+                            self.selected_matrix_row = clicked_idx;
+                            return;
+                        }
+                    }
+                }
+            }
+
+            // D. Tab 2: Patches View click
+            if self.current_tab == 2 {
+                if let Some(patch_targets) = &self.click_targets.patches {
+                    if let Some(btn_app) = patch_targets.btn_apply {
+                        if in_rect(btn_app, col, row) {
+                            self.apply_current_patch();
+                            return;
+                        }
+                    }
+                    if let Some(btn_roll) = patch_targets.btn_rollback {
+                        if in_rect(btn_roll, col, row) {
+                            self.rollback_current_patch();
+                            return;
+                        }
+                    }
+                    if in_rect(patch_targets.list_area, col, row) {
+                        let clicked_patch = (row.saturating_sub(patch_targets.list_area.y)) as usize / 3;
+                        if clicked_patch < self.patches.len() {
+                            self.selected_patch_row = clicked_patch;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        // E. Forward Mouse to Rataflow Canvas on Tab 0 (Node drag, node click, pan, zoom)
+        if self.current_tab == 0 {
             for event in self.flow.handle_mouse_event(mouse).into_events() {
                 match event {
                     FlowEvent::NodeClicked { node_id } => {
@@ -472,7 +600,8 @@ impl App {
         let area = f.area();
         match self.mode {
             AppMode::Welcome => {
-                WelcomeView::render(f, area, &self.welcome_input, &self.target_dir.display().to_string());
+                let btn = WelcomeView::render(f, area, &self.welcome_input, &self.target_dir.display().to_string());
+                self.click_targets.welcome_btn = Some(btn);
             }
             AppMode::Workspace => {
                 self.render_workspace(f, area);
@@ -480,7 +609,7 @@ impl App {
         }
     }
 
-    fn render_workspace(&mut self, f: &mut Frame, area: ratatui::layout::Rect) {
+    fn render_workspace(&mut self, f: &mut Frame, area: Rect) {
         let root_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -490,7 +619,7 @@ impl App {
             ])
             .split(area);
 
-        // Top Header Line
+        // Top Header
         let status_badge = if self.awaiting_confirmation {
             Span::styled(" [confirm?] ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD))
         } else if self.is_running {
@@ -515,18 +644,18 @@ impl App {
         ]);
         f.render_widget(Paragraph::new(top_header), root_chunks[0]);
 
-        // Main Horizontal Split: Left Sidebar (Chatbot + Node Inspector) vs Right Content
+        // Main Horizontal Split: Left Sidebar Chatbot (36%) vs Right Workspace Area (64%)
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(34),
-                Constraint::Percentage(66),
+                Constraint::Percentage(36),
+                Constraint::Percentage(64),
             ])
             .split(root_chunks[1]);
 
-        // Left Sidebar
+        // Left Sidebar Chatbot
         let sel_node = self.selected_node_id.as_ref().and_then(|id| self.nodes_info.get(id));
-        SidebarView::render(
+        let sidebar_targets = SidebarView::render(
             f,
             main_chunks[0],
             &self.chat_messages,
@@ -534,8 +663,9 @@ impl App {
             &self.prompt_input,
             self.awaiting_confirmation,
         );
+        self.click_targets.sidebar = Some(sidebar_targets);
 
-        // Right Content Area (Tabs + Viewports)
+        // Right Workspace Area: Tab Strip + Viewport
         let right_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -543,6 +673,18 @@ impl App {
                 Constraint::Min(6),
             ])
             .split(main_chunks[1]);
+
+        // Calculate Clickable Tab Rectangles
+        let tab_bar_area = right_chunks[0];
+        let tab_width = tab_bar_area.width / 5;
+        let mut tab_rects = Vec::new();
+        for i in 0..5 {
+            tab_rects.push((
+                i,
+                Rect::new(tab_bar_area.x + i as u16 * tab_width, tab_bar_area.y, tab_width, tab_bar_area.height),
+            ));
+        }
+        self.click_targets.tab_rects = tab_rects;
 
         let titles = vec![
             " 1 flow graph ",
@@ -561,8 +703,14 @@ impl App {
         let content_area = right_chunks[1];
         match self.current_tab {
             0 => GraphView::render(f, content_area, &mut self.flow),
-            1 => MatrixView::render(f, content_area, &self.findings, self.selected_matrix_row),
-            2 => PatchView::render(f, content_area, &self.patches, self.selected_patch_row, &self.action_msg),
+            1 => {
+                let table_rect = MatrixView::render(f, content_area, &self.findings, self.selected_matrix_row);
+                self.click_targets.findings_table = Some(table_rect);
+            }
+            2 => {
+                let patch_targets = PatchView::render(f, content_area, &self.patches, self.selected_patch_row, &self.action_msg);
+                self.click_targets.patches = Some(patch_targets);
+            }
             3 => LogsView::render(f, content_area, &self.logs, 0),
             4 => SkillsView::render(f, content_area, &self.skills.skills),
             _ => {}
@@ -570,19 +718,22 @@ impl App {
 
         // Bottom Footer Bar
         let footer = Line::from(vec![
-            Span::styled("tab", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            Span::styled(" next view  │  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("p", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled("click anywhere to interact  │  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("tab", Style::default().fg(Color::White)),
+            Span::styled(" views  │  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("p", Style::default().fg(Color::White)),
             Span::styled(" pause/resume  │  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("a", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            Span::styled(" apply patch  │  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("r", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled("a", Style::default().fg(Color::White)),
+            Span::styled(" apply  │  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("r", Style::default().fg(Color::White)),
             Span::styled(" rollback  │  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("e", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            Span::styled(" export  │  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("esc", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled("esc", Style::default().fg(Color::White)),
             Span::styled(" quit", Style::default().fg(Color::DarkGray)),
         ]);
         f.render_widget(Paragraph::new(footer), root_chunks[2]);
     }
+}
+
+fn in_rect(rect: Rect, col: u16, row: u16) -> bool {
+    col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
 }

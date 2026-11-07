@@ -7,6 +7,12 @@ use ratatui::{
     Frame,
 };
 
+pub struct PatchClickTargets {
+    pub list_area: Rect,
+    pub btn_apply: Option<Rect>,
+    pub btn_rollback: Option<Rect>,
+}
+
 pub struct PatchView;
 
 impl PatchView {
@@ -16,7 +22,7 @@ impl PatchView {
         patches: &[HardeningPatch],
         selected_index: usize,
         action_msg: &Option<String>,
-    ) {
+    ) -> PatchClickTargets {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -70,30 +76,54 @@ impl PatchView {
 
         f.render_widget(Paragraph::new(list_lines).block(list_block), chunks[0]);
 
-        // Right Panel: Diff Viewer + Unit Test Viewer
+        // Right Panel: Action Buttons + Diff Viewer + Unit Test Viewer
         let right_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(2),
+                Constraint::Length(3),
                 Constraint::Percentage(52),
                 Constraint::Percentage(48),
             ])
             .split(chunks[1]);
 
-        // Action Status Bar
+        // Top Action Bar with Clickable Buttons
+        let action_bar_area = right_chunks[0];
+        let action_split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(24),
+                Constraint::Length(16),
+                Constraint::Min(10),
+            ])
+            .split(action_bar_area);
+
+        let apply_rect = action_split[0];
+        let rollback_rect = action_split[1];
+        let msg_rect = action_split[2];
+
+        let apply_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::White));
+        let apply_text = Line::from(Span::styled(" [ ✓ Apply Patch to Disk ] ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)));
+        f.render_widget(Paragraph::new(apply_text).centered().block(apply_block), apply_rect);
+
+        let roll_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+        let roll_text = Line::from(Span::styled(" [ ↩ Rollback ] ", Style::default().fg(Color::Gray)));
+        f.render_widget(Paragraph::new(roll_text).centered().block(roll_block), rollback_rect);
+
         let status_text = if let Some(msg) = action_msg {
             Line::from(vec![
                 Span::styled("status: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(msg, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(msg, Style::default().fg(Color::White)),
             ])
         } else {
             Line::from(vec![
-                Span::styled("actions: ", Style::default().fg(Color::DarkGray)),
-                Span::styled("[a] apply to disk  │  [r] rollback  │  [↑/↓] select patch", Style::default().fg(Color::Gray)),
+                Span::styled("click buttons or press [a] / [r]", Style::default().fg(Color::DarkGray)),
             ])
         };
-
-        f.render_widget(Paragraph::new(status_text), right_chunks[0]);
+        f.render_widget(Paragraph::new(status_text), msg_rect);
 
         // Diff Viewer
         let diff_block = Block::default()
@@ -149,5 +179,11 @@ impl PatchView {
         };
 
         f.render_widget(Paragraph::new(test_lines).block(test_block), right_chunks[2]);
+
+        PatchClickTargets {
+            list_area: chunks[0],
+            btn_apply: Some(apply_rect),
+            btn_rollback: Some(rollback_rect),
+        }
     }
 }

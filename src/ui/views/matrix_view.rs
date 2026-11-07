@@ -15,7 +15,7 @@ impl MatrixView {
         area: Rect,
         findings: &[VulnerabilityFinding],
         selected_index: usize,
-    ) {
+    ) -> Rect {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -78,8 +78,7 @@ impl MatrixView {
             Constraint::Length(12),
         ];
 
-        let table_block = Block::default()
-            .borders(Borders::NONE);
+        let table_block = Block::default().borders(Borders::NONE);
 
         let table = Table::new(rows, widths)
             .header(header)
@@ -108,8 +107,8 @@ impl MatrixView {
                     Span::styled(&selected.recommendation, Style::default().fg(Color::Gray)),
                 ]),
                 Line::from(vec![
-                    Span::styled("action:      ", Style::default().fg(Color::DarkGray)),
-                    Span::styled("press [3] to view unified diff patch, [a] to apply, [r] to rollback", Style::default().fg(Color::DarkGray)),
+                    Span::styled("click:       ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("click any row to inspect  │  switch to tab 3 to review diff  │  [a] apply patch", Style::default().fg(Color::DarkGray)),
                 ]),
             ]
         } else {
@@ -117,5 +116,7 @@ impl MatrixView {
         };
 
         f.render_widget(Paragraph::new(detail_content).block(detail_block), chunks[1]);
+
+        chunks[0]
     }
 }

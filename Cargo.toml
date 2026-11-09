@@ -1,11 +1,12 @@
 [package]
-name = "kartikacyber"
+name = "constellation"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 chrono = "0.4.45"
 crossterm = "0.29.0"
+pulldown-cmark = "0.13.6"
 rataflow = "0.1.0"
 ratatui = "0.30.2"
 regex = "1.13.1"

@@ -25,13 +25,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 1. Help flag
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("kartikacyber :: autonomous pre-production code defense harness");
+        println!("constellation :: autonomous pre-production code defense harness");
         println!("\nusage:");
-        println!("  kartikacyber                   launch interactive launcher (ascii + target prompt)");
-        println!("  kartikacyber [path]            run directly on specified local directory");
-        println!("  kartikacyber --ci [path]       run in headless CI/CD mode (exit code 1 if unpatched issues)");
-        println!("  kartikacyber --install-hook    install automated .git/hooks/pre-commit defense guard");
-        println!("  kartikacyber --help            show this help message\n");
+        println!("  constellation                   launch interactive launcher (ascii + target prompt)");
+        println!("  constellation [path]            run directly on specified local directory");
+        println!("  constellation --ci [path]       run in headless CI/CD mode (exit code 1 if unpatched issues)");
+        println!("  constellation --install-hook    install automated .git/hooks/pre-commit defense guard");
+        println!("  constellation --help            show this help message\n");
         return Ok(());
     }
 
@@ -43,13 +43,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             exit(1);
         }
         let hook_script = r#"#!/usr/bin/env bash
-# kartikacyber automated pre-commit defense hook
-echo "[kartikacyber] verifying pre-production code defense..."
-kartikacyber --ci .
+# constellation automated pre-commit defense hook
+echo "[constellation] verifying pre-production code defense..."
+constellation --ci .
 EXIT_CODE=$?
 if [ $EXIT_CODE -ne 0 ]; then
-    echo "[kartikacyber] commit blocked due to unresolved security vulnerabilities!"
-    echo "[kartikacyber] run 'kartikacyber' to review and apply auto-hardening patches."
+    echo "[constellation] commit blocked due to unresolved security vulnerabilities!"
+    echo "[constellation] run 'constellation' to review and apply auto-hardening patches."
     exit 1
 fi
 "#;
@@ -82,7 +82,7 @@ fi
         });
 
     if is_ci_mode {
-        println!("kartikacyber :: headless ci defense audit running on: {}", target_dir.display());
+        println!("constellation :: headless ci defense audit running on: {}", target_dir.display());
         let profile = orchestrator::WorkspaceScanner::scan(&target_dir);
         let secrets = subagents::SecretHunterAgent::scan(&target_dir);
         let sast = subagents::SastAnalyzerAgent::scan(&target_dir);

@@ -1,6 +1,6 @@
-use kartikacyber::orchestrator::{AgentGraphBuilder, StrategyPlanner, WorkspaceScanner};
-use kartikacyber::skills::SkillRegistry;
-use kartikacyber::subagents::{
+use constellation::orchestrator::{AgentGraphBuilder, StrategyPlanner, WorkspaceScanner};
+use constellation::skills::SkillRegistry;
+use constellation::subagents::{
     AutoHardeningAgent, NetworkProberAgent, SastAnalyzerAgent, SecretHunterAgent, VerificationAgent,
 };
 use std::fs;

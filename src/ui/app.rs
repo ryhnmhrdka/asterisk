@@ -97,7 +97,7 @@ impl App {
             findings: Vec::new(),
             patches: Vec::new(),
             logs: Vec::new(),
-            chat_messages: vec![ChatMessage::System("autonomous code defense harness initialized.".to_string())],
+            chat_messages: vec![ChatMessage::System("constellation autonomous code defense harness initialized.".to_string())],
             chat_scroll: 0,
             skills,
             selected_matrix_row: 0,
@@ -266,8 +266,13 @@ impl App {
             KeyCode::Esc => true,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => true,
             KeyCode::Enter => {
-                if !self.welcome_input.trim().is_empty() {
-                    self.target_dir = PathBuf::from(self.welcome_input.trim());
+                let input = self.welcome_input.trim().to_string();
+                if !input.is_empty() {
+                    if std::path::Path::new(&input).exists() {
+                        self.target_dir = PathBuf::from(&input);
+                    } else {
+                        self.chat_messages.push(ChatMessage::User(input));
+                    }
                 }
                 self.profile = WorkspaceScanner::scan(&self.target_dir);
                 self.mode = AppMode::Workspace;
@@ -462,8 +467,13 @@ impl App {
             if is_left_click {
                 if let Some(btn) = self.click_targets.welcome_btn {
                     if in_rect(btn, col, row) {
-                        if !self.welcome_input.trim().is_empty() {
-                            self.target_dir = PathBuf::from(self.welcome_input.trim());
+                        let input = self.welcome_input.trim().to_string();
+                        if !input.is_empty() {
+                            if std::path::Path::new(&input).exists() {
+                                self.target_dir = PathBuf::from(&input);
+                            } else {
+                                self.chat_messages.push(ChatMessage::User(input));
+                            }
                         }
                         self.profile = WorkspaceScanner::scan(&self.target_dir);
                         self.mode = AppMode::Workspace;
@@ -584,8 +594,8 @@ impl App {
         let area = f.area();
         match self.mode {
             AppMode::Welcome => {
-                let btn = WelcomeView::render(f, area, &self.welcome_input, &self.target_dir.display().to_string());
-                self.click_targets.welcome_btn = Some(btn);
+                let targets = WelcomeView::render(f, area, &self.welcome_input, &self.target_dir.display().to_string());
+                self.click_targets.welcome_btn = Some(targets.prompt_box);
             }
             AppMode::Workspace => {
                 self.render_workspace(f, area);
@@ -614,7 +624,7 @@ impl App {
 
         let unpatched_count = self.findings.iter().filter(|x| !x.patched).count();
         let top_header = Line::from(vec![
-            Span::styled("kartikacyber", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled("constellation", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
             Span::styled(" :: ", Style::default().fg(Color::DarkGray)),
             Span::styled(self.target_dir.display().to_string(), Style::default().fg(Color::White)),
             Span::styled("  │  files: ", Style::default().fg(Color::DarkGray)),

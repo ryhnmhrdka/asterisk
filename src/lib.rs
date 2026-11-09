@@ -1,3 +1,4 @@
+pub mod core;
 pub mod execution;
 pub mod orchestrator;
 pub mod skills;

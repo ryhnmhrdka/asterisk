@@ -1,4 +1,5 @@
 /target
 /pkg
 /reference
+/.sentinel
 *.pkg.tar.zst

@@ -4,12 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+ast-grep-core = "0.51.1"
+cap-std = "4.0.3"
+cedar-policy = "4.14.1"
 chrono = "0.4.45"
 crossterm = "0.29.0"
+entropy = "0.4.3"
+git2 = { version = "0.21.0", features = ["vendored-libgit2", "vendored-openssl"] }
+petgraph = "0.8.3"
 pulldown-cmark = "0.13.6"
 rataflow = "0.1.0"
 ratatui = "0.30.2"
 regex = "1.13.1"
+rig-core = "0.44.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 similar = "3.2.1"

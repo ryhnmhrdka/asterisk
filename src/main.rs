@@ -1,3 +1,4 @@
+mod core;
 mod execution;
 mod orchestrator;
 mod skills;

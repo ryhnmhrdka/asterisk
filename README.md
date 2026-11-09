@@ -72,9 +72,12 @@ designed with a sleek, classic monochrome aesthetic (opencode style: black, whit
 ## quick start
 
 ```bash
-# run on sample vulnerable target
-./target/release/kartikacyber ./sample_target
+# run on current directory
+./target/release/constellation
 
-# run on any local codebase
-./target/release/kartikacyber /path/to/project
+# run on specified project repository
+./target/release/constellation /path/to/project
+
+# run in headless CI/CD mode
+./target/release/constellation --ci /path/to/project
 ```

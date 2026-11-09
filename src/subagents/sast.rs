@@ -57,8 +57,16 @@ impl SastAnalyzerAgent {
         for entry in WalkDir::new(root_path)
             .into_iter()
             .filter_entry(|e| {
+                if e.path() == root_path {
+                    return true;
+                }
                 let name = e.file_name().to_string_lossy();
-                !name.starts_with('.') && name != "target" && name != "node_modules" && name != "vendor"
+                !name.starts_with('.')
+                    && name != "target"
+                    && name != "node_modules"
+                    && name != "vendor"
+                    && name != "reference"
+                    && name != "fixtures"
             })
             .filter_map(|e| e.ok())
         {

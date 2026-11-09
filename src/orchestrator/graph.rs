@@ -34,8 +34,16 @@ impl AgentGraphBuilder {
             .max_depth(2)
             .into_iter()
             .filter_entry(|e| {
+                if e.path() == target_path {
+                    return true;
+                }
                 let name = e.file_name().to_string_lossy();
-                !name.starts_with('.') && name != "target" && name != "node_modules" && name != "vendor"
+                !name.starts_with('.')
+                    && name != "target"
+                    && name != "node_modules"
+                    && name != "vendor"
+                    && name != "reference"
+                    && name != "fixtures"
             })
             .filter_map(|e| e.ok())
         {

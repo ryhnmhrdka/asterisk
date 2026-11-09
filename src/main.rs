@@ -81,11 +81,15 @@ fi
         let secrets = subagents::SecretHunterAgent::scan(&target_dir);
         let sast = subagents::SastAnalyzerAgent::scan(&target_dir);
         let net = subagents::NetworkProberAgent::scan(&target_dir);
+        let git_secrets = core::GitHistorySecretMiner::scan_commit_history(&target_dir);
+        let sca = core::ScaDependencyAuditor::audit(&target_dir);
 
         let mut findings = Vec::new();
         findings.extend(secrets);
         findings.extend(sast);
         findings.extend(net);
+        findings.extend(git_secrets);
+        findings.extend(sca);
 
         let patches = subagents::AutoHardeningAgent::generate_patches(&target_dir, &findings);
 
@@ -151,6 +155,6 @@ fi
     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
 
-    println!("kartikacyber defense harness terminated cleanly.");
+    println!("constellation defense harness terminated cleanly.");
     Ok(())
 }

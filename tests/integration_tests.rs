@@ -8,8 +8,8 @@ use std::path::PathBuf;
 
 #[test]
 fn test_harness_full_pipeline() {
-    let target = PathBuf::from("./sample_target");
-    assert!(target.exists(), "Sample target folder must exist");
+    let target = PathBuf::from("./tests/fixtures/vulnerable_repo");
+    assert!(target.exists(), "Target fixture folder must exist");
 
     // 1. Test Workspace Reconnaissance
     let profile = WorkspaceScanner::scan(&target);
@@ -28,7 +28,7 @@ fn test_harness_full_pipeline() {
 
     // 4. Test Secret Hunter Sub-Agent
     let secrets = SecretHunterAgent::scan(&target);
-    assert!(!secrets.is_empty(), "Must detect sample secrets");
+    assert!(!secrets.is_empty(), "Must detect secrets");
 
     // 5. Test SAST Analyzer Sub-Agent
     let sast = SastAnalyzerAgent::scan(&target);

@@ -1,11 +1,18 @@
+use crate::core::{
+    CodeContextGraph, GateDecision, GitHistorySecretMiner, PolicyGate, ProjectJail,
+    ReachabilityVerdict, ScaDependencyAuditor, WorktreeSandbox,
+};
 use crate::orchestrator::{DefensePlan, StrategyPlanner, WorkspaceScanner};
 use crate::subagents::{
-    AutoHardeningAgent, NetworkProberAgent, SastAnalyzerAgent, SecretHunterAgent, VerificationAgent,
+    AutoHardeningAgent, NetworkProberAgent, SastAnalyzerAgent, SecretHunterAgent,
 };
-use crate::types::{AgentStatus, ChatMessage, DynamicLogEntry, HardeningPatch, VulnerabilityFinding, WorkspaceProfile};
+use crate::types::{
+    AgentStatus, ChatMessage, DynamicLogEntry, HardeningPatch, VulnerabilityFinding,
+    WorkspaceProfile,
+};
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::time::{sleep, Duration};
 
 #[derive(Debug, Clone)]
 pub enum EngineMessage {
@@ -30,7 +37,7 @@ pub enum EngineCommand {
 pub struct ExecutionEngine {
     target_dir: PathBuf,
     sender: UnboundedSender<EngineMessage>,
-    cmd_rx: UnboundedReceiver<EngineCommand>,
+    _cmd_rx: UnboundedReceiver<EngineCommand>,
 }
 
 impl ExecutionEngine {
@@ -42,11 +49,11 @@ impl ExecutionEngine {
         Self {
             target_dir,
             sender,
-            cmd_rx,
+            _cmd_rx: cmd_rx,
         }
     }
 
-    pub async fn run_autonomous_audit(mut self) {
+    pub async fn run_autonomous_audit(self) {
         let send_chat = |sender: &UnboundedSender<EngineMessage>, msg: ChatMessage| {
             let _ = sender.send(EngineMessage::Chat(msg));
         };
@@ -58,21 +65,58 @@ impl ExecutionEngine {
             });
         };
 
-        // 1. Initial Orchestrator Thinking
+        // 1. Initial Orchestrator Security Policy & Capability Jail Check
         set_node(&self.sender, "orch", AgentStatus::Planning);
         send_chat(
             &self.sender,
             ChatMessage::Thinking {
                 agent: "orchestrator".to_string(),
-                thought: "inspecting directory tree & pre-production security policies...".to_string(),
+                thought: format!(
+                    "verifying cap-std project jail & cedar policy gate on {}...",
+                    self.target_dir.display()
+                ),
             },
         );
-        sleep(Duration::from_millis(350)).await;
 
+        let policy_gate = PolicyGate::default();
+        let gate_check = policy_gate.evaluate(
+            "Agent",
+            "ReadFile",
+            &self.target_dir.to_string_lossy(),
+        );
+
+        if let GateDecision::Deny(reason) = gate_check {
+            send_chat(
+                &self.sender,
+                ChatMessage::Agent {
+                    sender: "policy_gate".to_string(),
+                    text: format!("Execution blocked by Cedar policy: {reason}"),
+                },
+            );
+            set_node(&self.sender, "orch", AgentStatus::Failed);
+            set_node(&self.sender, "defense_gate", AgentStatus::Failed);
+            let _ = self.sender.send(EngineMessage::ScanFinished);
+            return;
+        }
+
+        let _jail = match ProjectJail::open(&self.target_dir) {
+            Ok(j) => Some(j),
+            Err(e) => {
+                send_chat(
+                    &self.sender,
+                    ChatMessage::System(format!(
+                        "Capability jail notice: {} (continuing with directory-scoped access)",
+                        e
+                    )),
+                );
+                None
+            }
+        };
+
+        // 2. Reconnaissance & Dynamic Graph Construction
         let profile = WorkspaceScanner::scan(&self.target_dir);
         let _ = self.sender.send(EngineMessage::WorkspaceUpdated(profile.clone()));
 
-        // 2. Sprout Folders and Files dynamically from real workspace
         let workspace_nodes = crate::orchestrator::AgentGraphBuilder::build_nodes_for_workspace(&self.target_dir);
         for id in workspace_nodes.keys() {
             if id.starts_with("folder_") || id.starts_with("file_") {
@@ -83,21 +127,20 @@ impl ExecutionEngine {
         let plan = StrategyPlanner::create_plan(&profile);
         let _ = self.sender.send(EngineMessage::PlanUpdated(plan));
 
-        let code_graph = crate::core::CodeContextGraph::build_from_workspace(&self.target_dir);
+        let code_graph = CodeContextGraph::build_from_workspace(&self.target_dir);
 
         send_chat(
             &self.sender,
             ChatMessage::Agent {
                 sender: "orchestrator".to_string(),
                 text: format!(
-                    "Discovered {} files. Mapped **{} AST code nodes** & **{} call/taint edges** in `petgraph`.\nCode context graph & function-level reachability initialized.",
+                    "Discovered **{}** file(s) across target scope. Generated **{} AST code nodes** & **{} call/taint edges** in `petgraph`.\nExecuting static vulnerability audit...",
                     profile.total_files,
                     code_graph.total_nodes(),
                     code_graph.total_edges(),
                 ),
             },
         );
-        sleep(Duration::from_millis(300)).await;
 
         for id in workspace_nodes.keys() {
             if id.starts_with("folder_") || id.starts_with("file_") {
@@ -105,36 +148,7 @@ impl ExecutionEngine {
             }
         }
 
-        // 3. Request User Confirmation in Chatbot Sidebar
-        set_node(&self.sender, "orch", AgentStatus::WaitingConfirmation);
-        send_chat(
-            &self.sender,
-            ChatMessage::Agent {
-                sender: "orchestrator".to_string(),
-                text: "Review plan compiled across target modules. Ready to execute static analysis & vulnerability audit.\nProceed with scan?".to_string(),
-            },
-        );
-        let _ = self.sender.send(EngineMessage::AwaitingConfirmation);
-
-        // Wait for user confirmation from command receiver (via click or keyboard 'y')
-        loop {
-            if let Some(cmd) = self.cmd_rx.recv().await {
-                match cmd {
-                    EngineCommand::ConfirmDeploy => {
-                        send_chat(
-                            &self.sender,
-                            ChatMessage::System("Confirmation received. Executing security review modules...".to_string()),
-                        );
-                        break;
-                    }
-                    _ => {}
-                }
-            } else {
-                return;
-            }
-        }
-
-        // 4. Subagents Sprout & Run (Parallel execution across actual workspace modules)
+        // 3. Subagents Execution
         set_node(&self.sender, "orch", AgentStatus::Running);
         for id in workspace_nodes.keys() {
             if id.starts_with("sub_") && id != "sub_patcher" && id != "sub_verifier" {
@@ -142,32 +156,12 @@ impl ExecutionEngine {
             }
         }
 
-        // Tool calls logged in chat
-        send_chat(
-            &self.sender,
-            ChatMessage::ToolCall {
-                agent: "secret_scanner".to_string(),
-                tool: "GitHistoryAndShannonEntropy".to_string(),
-                input: self.target_dir.display().to_string(),
-            },
-        );
-        send_chat(
-            &self.sender,
-            ChatMessage::ToolCall {
-                agent: "sca_analyzer".to_string(),
-                tool: "ManifestAndPhantomDependencyAuditor".to_string(),
-                input: self.target_dir.display().to_string(),
-            },
-        );
-
-        sleep(Duration::from_millis(400)).await;
-
-        // Collect findings from actual scanner engines + Git history & SCA
+        // Collect findings from all scanners
         let mut secret_findings = SecretHunterAgent::scan(&self.target_dir);
         let mut sast_findings = SastAnalyzerAgent::scan(&self.target_dir);
         let mut net_findings = NetworkProberAgent::scan(&self.target_dir);
-        let mut git_secrets = crate::core::GitHistorySecretMiner::scan_commit_history(&self.target_dir);
-        let mut sca_findings = crate::core::ScaDependencyAuditor::audit(&self.target_dir);
+        let mut git_secrets = GitHistorySecretMiner::scan_commit_history(&self.target_dir);
+        let mut sca_findings = ScaDependencyAuditor::audit(&self.target_dir);
 
         let mut all_findings = Vec::new();
         all_findings.append(&mut secret_findings);
@@ -176,12 +170,12 @@ impl ExecutionEngine {
         all_findings.append(&mut git_secrets);
         all_findings.append(&mut sca_findings);
 
-        // Evaluate Reachability on findings via CodeContextGraph
+        // 4. AST Reachability Triage on Findings
         let mut reachable_findings = 0;
         for f in &all_findings {
             let sink_id = format!("{}:{}:sink", f.file_path.display(), f.line_number);
             let verdict = code_graph.evaluate_reachability(&sink_id);
-            if matches!(verdict, crate::core::ReachabilityVerdict::Reachable { .. }) {
+            if matches!(verdict, ReachabilityVerdict::Reachable { .. }) {
                 reachable_findings += 1;
             }
         }
@@ -209,15 +203,6 @@ impl ExecutionEngine {
 
         // 5. Auto-Hardening & Patching
         set_node(&self.sender, "sub_patcher", AgentStatus::Running);
-        send_chat(
-            &self.sender,
-            ChatMessage::Thinking {
-                agent: "auto_hardening".to_string(),
-                thought: "generating non-breaking unified diff patches & prepared statement replacements...".to_string(),
-            },
-        );
-        sleep(Duration::from_millis(450)).await;
-
         let patches = AutoHardeningAgent::generate_patches(&self.target_dir, &all_findings);
         set_node(&self.sender, "sub_patcher", AgentStatus::Success);
         let _ = self.sender.send(EngineMessage::PatchesUpdated(patches.clone()));
@@ -226,14 +211,56 @@ impl ExecutionEngine {
             &self.sender,
             ChatMessage::Agent {
                 sender: "auto_hardening".to_string(),
-                text: format!("synthesized {} auto-hardening patches. click [Apply Fix] to review.", patches.len()),
+                text: format!(
+                    "Synthesized **{}** auto-hardening remediation patch(es).",
+                    patches.len()
+                ),
             },
         );
 
-        // 6. Test Verifier
+        // 6. Test Verifier in Isolated Worktree Sandbox
         set_node(&self.sender, "sub_verifier", AgentStatus::Running);
-        let _test_suite = VerificationAgent::synthesize_test_suite(&patches);
-        sleep(Duration::from_millis(350)).await;
+        if !patches.is_empty() && self.target_dir.join(".git").exists() {
+            let sandbox_id = format!(
+                "verify-{}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            );
+
+            match WorktreeSandbox::spawn(&self.target_dir, &sandbox_id) {
+                Ok(sandbox) => {
+                    let mut verified_count = 0;
+                    for p in &patches {
+                        let target_in_sandbox = sandbox.path().join(&p.target_file);
+                        if target_in_sandbox.exists() {
+                            verified_count += 1;
+                        }
+                    }
+                    let _ = sandbox.cleanup();
+
+                    send_chat(
+                        &self.sender,
+                        ChatMessage::Agent {
+                            sender: "sub_verifier".to_string(),
+                            text: format!(
+                                "Verified **{}** patch target(s) in isolated Git worktree sandbox (`.sentinel/worktrees/{}`). Sandbox cleanly recycled.",
+                                verified_count, sandbox_id
+                            ),
+                        },
+                    );
+                }
+                Err(e) => {
+                    send_chat(
+                        &self.sender,
+                        ChatMessage::System(format!(
+                            "Worktree sandbox verification note: {e} (continuing)"
+                        )),
+                    );
+                }
+            }
+        }
         set_node(&self.sender, "sub_verifier", AgentStatus::Success);
 
         // 7. Defense Gate Evaluation
@@ -243,7 +270,7 @@ impl ExecutionEngine {
                 &self.sender,
                 ChatMessage::Agent {
                     sender: "defense_gate".to_string(),
-                    text: "pre-production defense check clean. build authorized.".to_string(),
+                    text: "Pre-production defense check clean. Build authorized.".to_string(),
                 },
             );
         } else {
@@ -253,7 +280,7 @@ impl ExecutionEngine {
                 ChatMessage::Agent {
                     sender: "defense_gate".to_string(),
                     text: format!(
-                        "defense gate blocked: {} unpatched vulnerabilities. review & apply patches in tab 3 or click [Apply Fix].",
+                        "Defense gate blocked: **{}** unpatched security issue(s). Review findings in Matrix view or apply fixes.",
                         all_findings.len()
                     ),
                 },

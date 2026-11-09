@@ -22,7 +22,9 @@ use ratatui::{
 };
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use crate::core::{PolicyGate, SecurityAgentHub};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppMode {
@@ -279,7 +281,16 @@ impl App {
                     if std::path::Path::new(&input).exists() {
                         self.target_dir = PathBuf::from(&input);
                     } else {
-                        self.chat_messages.push(ChatMessage::User(input));
+                        self.chat_messages.push(ChatMessage::User(input.clone()));
+                        let hub = SecurityAgentHub::new(self.target_dir.clone(), Arc::new(PolicyGate::default()), self.active_provider);
+                        let sender = self.engine_tx.clone();
+                        tokio::spawn(async move {
+                            let reply = hub.query(&input).await;
+                            let _ = sender.send(EngineMessage::Chat(ChatMessage::Agent {
+                                sender: "orchestrator".to_string(),
+                                text: reply,
+                            }));
+                        });
                     }
                 }
                 self.profile = WorkspaceScanner::scan(&self.target_dir);
@@ -424,9 +435,15 @@ impl App {
                     text: format!("Configured active AI provider to **{}**.", self.active_provider.name()),
                 });
             } else {
-                self.chat_messages.push(ChatMessage::Agent {
-                    sender: "orchestrator".to_string(),
-                    text: format!("command received: '{input}'. use /apply, /rollback, /pause, or click action buttons."),
+                let hub = SecurityAgentHub::new(self.target_dir.clone(), Arc::new(PolicyGate::default()), self.active_provider);
+                let sender = self.engine_tx.clone();
+                let prompt_text = input.clone();
+                tokio::spawn(async move {
+                    let reply = hub.query(&prompt_text).await;
+                    let _ = sender.send(EngineMessage::Chat(ChatMessage::Agent {
+                        sender: "orchestrator".to_string(),
+                        text: reply,
+                    }));
                 });
             }
         }
@@ -505,7 +522,16 @@ impl App {
                             if std::path::Path::new(&input).exists() {
                                 self.target_dir = PathBuf::from(&input);
                             } else {
-                                self.chat_messages.push(ChatMessage::User(input));
+                                self.chat_messages.push(ChatMessage::User(input.clone()));
+                                let hub = SecurityAgentHub::new(self.target_dir.clone(), Arc::new(PolicyGate::default()), self.active_provider);
+                                let sender = self.engine_tx.clone();
+                                tokio::spawn(async move {
+                                    let reply = hub.query(&input).await;
+                                    let _ = sender.send(EngineMessage::Chat(ChatMessage::Agent {
+                                        sender: "orchestrator".to_string(),
+                                        text: reply,
+                                    }));
+                                });
                             }
                         }
                         self.profile = WorkspaceScanner::scan(&self.target_dir);

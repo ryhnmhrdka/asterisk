@@ -100,6 +100,12 @@ impl PolicyGate {
     }
 }
 
+impl Default for PolicyGate {
+    fn default() -> Self {
+        Self::new().expect("Failed to initialize default Cedar policy set")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

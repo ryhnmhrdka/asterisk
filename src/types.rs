@@ -95,7 +95,38 @@ pub struct WorkspaceProfile {
     pub has_mobile: bool,
 }
 
-/// Rich Chat Message model inspired by SynapsCLI
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AiProvider {
+    OllamaLocal,
+    AnthropicClaude,
+    OpenAiGpt4o,
+    GoogleGemini,
+    DeepSeek,
+}
+
+impl AiProvider {
+    pub fn name(&self) -> &'static str {
+        match self {
+            AiProvider::OllamaLocal => "Ollama (Local Offline)",
+            AiProvider::AnthropicClaude => "Anthropic Claude 3.7",
+            AiProvider::OpenAiGpt4o => "OpenAI GPT-4o",
+            AiProvider::GoogleGemini => "Google Gemini 2.0",
+            AiProvider::DeepSeek => "DeepSeek R1/V3",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            AiProvider::OllamaLocal => AiProvider::AnthropicClaude,
+            AiProvider::AnthropicClaude => AiProvider::OpenAiGpt4o,
+            AiProvider::OpenAiGpt4o => AiProvider::GoogleGemini,
+            AiProvider::GoogleGemini => AiProvider::DeepSeek,
+            AiProvider::DeepSeek => AiProvider::OllamaLocal,
+        }
+    }
+}
+
+/// Rich Chat Message model
 #[derive(Debug, Clone)]
 pub enum ChatMessage {
     User(String),

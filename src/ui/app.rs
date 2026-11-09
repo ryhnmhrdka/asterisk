@@ -3,7 +3,7 @@ use crate::orchestrator::{AgentGraphBuilder, DefensePlan, WorkspaceScanner};
 use crate::skills::SkillRegistry;
 use crate::subagents::AutoHardeningAgent;
 use crate::types::{
-    AgentStatus, ChatMessage, DynamicLogEntry, HardeningPatch, SproutedNodeInfo,
+    AgentStatus, AiProvider, ChatMessage, DynamicLogEntry, HardeningPatch, SproutedNodeInfo,
     VulnerabilityFinding, WorkspaceProfile,
 };
 use crate::ui::views::{
@@ -20,7 +20,7 @@ use ratatui::{
     widgets::{Paragraph, Tabs},
     Frame,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
@@ -64,6 +64,8 @@ pub struct App {
     pub action_msg: Option<String>,
     pub is_running: bool,
     pub awaiting_confirmation: bool,
+    pub active_provider: AiProvider,
+    pub expanded_messages: HashSet<usize>,
 
     pub engine_rx: UnboundedReceiver<EngineMessage>,
     pub engine_tx: UnboundedSender<EngineMessage>,
@@ -105,6 +107,8 @@ impl App {
             action_msg: None,
             is_running: false,
             awaiting_confirmation: false,
+            active_provider: AiProvider::OllamaLocal,
+            expanded_messages: HashSet::new(),
             engine_rx: rx,
             engine_tx: tx,
             cmd_tx,
@@ -265,6 +269,10 @@ impl App {
         match key.code {
             KeyCode::Esc => true,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => true,
+            KeyCode::Tab => {
+                self.active_provider = self.active_provider.next();
+                false
+            }
             KeyCode::Enter => {
                 let input = self.welcome_input.trim().to_string();
                 if !input.is_empty() {
@@ -390,6 +398,29 @@ impl App {
                 self.export_security_report();
             } else if input == "/scan" || input == "scan" {
                 self.trigger_audit();
+            } else if input == "/provider" {
+                self.active_provider = self.active_provider.next();
+                self.chat_messages.push(ChatMessage::Agent {
+                    sender: "orchestrator".to_string(),
+                    text: format!("Switched active AI provider to **{}**.", self.active_provider.name()),
+                });
+            } else if let Some(prov_str) = input.strip_prefix("/provider ") {
+                let lower = prov_str.trim().to_lowercase();
+                if lower.contains("ollama") {
+                    self.active_provider = AiProvider::OllamaLocal;
+                } else if lower.contains("claude") {
+                    self.active_provider = AiProvider::AnthropicClaude;
+                } else if lower.contains("gpt") || lower.contains("openai") {
+                    self.active_provider = AiProvider::OpenAiGpt4o;
+                } else if lower.contains("gemini") {
+                    self.active_provider = AiProvider::GoogleGemini;
+                } else if lower.contains("deepseek") {
+                    self.active_provider = AiProvider::DeepSeek;
+                }
+                self.chat_messages.push(ChatMessage::Agent {
+                    sender: "orchestrator".to_string(),
+                    text: format!("Configured active AI provider to **{}**.", self.active_provider.name()),
+                });
             } else {
                 self.chat_messages.push(ChatMessage::Agent {
                     sender: "orchestrator".to_string(),
@@ -527,11 +558,23 @@ impl App {
                     }
                 }
 
-                // Subagent Tray row clicks (focusing subagent)
+                // Review module row clicks (focusing node)
                 for (node_id, row_rect) in &sidebar_targets.subagent_rows {
                     if in_rect(*row_rect, col, row) {
                         self.selected_node_id = Some(node_id.clone());
-                        self.action_msg = Some(format!("focused subagent {node_id}"));
+                        self.action_msg = Some(format!("focused module {node_id}"));
+                        return;
+                    }
+                }
+
+                // User chat bubble expand / collapse clicks
+                for (msg_idx, rect) in &sidebar_targets.user_msg_expand {
+                    if in_rect(*rect, col, row) {
+                        if self.expanded_messages.contains(msg_idx) {
+                            self.expanded_messages.remove(msg_idx);
+                        } else {
+                            self.expanded_messages.insert(*msg_idx);
+                        }
                         return;
                     }
                 }
@@ -594,7 +637,13 @@ impl App {
         let area = f.area();
         match self.mode {
             AppMode::Welcome => {
-                let targets = WelcomeView::render(f, area, &self.welcome_input, &self.target_dir.display().to_string());
+                let targets = WelcomeView::render(
+                    f,
+                    area,
+                    &self.welcome_input,
+                    &self.target_dir.display().to_string(),
+                    self.active_provider,
+                );
                 self.click_targets.welcome_btn = Some(targets.prompt_box);
             }
             AppMode::Workspace => {
@@ -615,9 +664,9 @@ impl App {
 
         // Top Header
         let status_badge = if self.awaiting_confirmation {
-            Span::styled(" [confirm?] ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD))
+            Span::styled(" [pending confirmation] ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD))
         } else if self.is_running {
-            Span::styled(" [running] ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD))
+            Span::styled(" [scanning] ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD))
         } else {
             Span::styled(" [ready] ", Style::default().fg(Color::DarkGray))
         };
@@ -630,9 +679,11 @@ impl App {
             Span::styled("  │  files: ", Style::default().fg(Color::DarkGray)),
             Span::styled(self.profile.total_files.to_string(), Style::default().fg(Color::White)),
             Span::styled("  │  findings: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{} ({} unpatched)", self.findings.len(), unpatched_count), Style::default().fg(Color::White)),
+            Span::styled(format!("{} ({} unresolved)", self.findings.len(), unpatched_count), Style::default().fg(Color::White)),
             Span::styled("  │  patches: ", Style::default().fg(Color::DarkGray)),
             Span::styled(self.patches.len().to_string(), Style::default().fg(Color::White)),
+            Span::styled("  │  provider: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(self.active_provider.name(), Style::default().fg(Color::Rgb(140, 190, 255))),
             Span::raw("   "),
             status_badge,
         ]);
@@ -658,6 +709,7 @@ impl App {
             sel_node,
             &self.prompt_input,
             self.awaiting_confirmation,
+            &self.expanded_messages,
         );
         self.click_targets.sidebar = Some(sidebar_targets);
 

@@ -69,7 +69,11 @@ impl SastAnalyzerAgent {
             let path = entry.path();
             let relative_path = path.strip_prefix(root_path).unwrap_or(path);
 
-            if let Ok(content) = fs::read_to_string(path) {
+            let raw_content = fs::read_to_string(path).or_else(|_| {
+                fs::read(path).map(|b| String::from_utf8_lossy(&b).to_string())
+            });
+
+            if let Ok(content) = raw_content {
                 for (idx, line) in content.lines().enumerate() {
                     for (title, re, sev, cwe, desc, rec) in &rules {
                         if re.is_match(line) {

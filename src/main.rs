@@ -72,14 +72,7 @@ fi
     let target_dir = explicit_target
         .as_ref()
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            let sample = PathBuf::from("./sample_target");
-            if sample.exists() {
-                sample
-            } else {
-                PathBuf::from(".")
-            }
-        });
+        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     if is_ci_mode {
         println!("constellation :: headless ci defense audit running on: {}", target_dir.display());

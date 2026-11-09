@@ -200,3 +200,4 @@ mod tests {
         assert_eq!(res, "α + β² ≤ (x₁/y₂)");
     }
 }
+

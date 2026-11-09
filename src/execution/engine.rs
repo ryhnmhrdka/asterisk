@@ -100,13 +100,13 @@ impl ExecutionEngine {
         set_node(&self.sender, "file_server", AgentStatus::Success);
         set_node(&self.sender, "file_api", AgentStatus::Success);
 
-        // 3. Request User Confirmation in Chatbot Sidebar (Synaps-style interactive prompt)
+        // 3. Request User Confirmation in Chatbot Sidebar
         set_node(&self.sender, "orch", AgentStatus::WaitingConfirmation);
         send_chat(
             &self.sender,
             ChatMessage::Agent {
                 sender: "orchestrator".to_string(),
-                text: "strategy planned. ready to deploy 5 worker subagents across backend/ and frontend/ modules.\nproceed with autonomous execution?".to_string(),
+                text: "Review plan compiled across target modules. Ready to execute static analysis & vulnerability audit.\nProceed with scan?".to_string(),
             },
         );
         let _ = self.sender.send(EngineMessage::AwaitingConfirmation);
@@ -118,7 +118,7 @@ impl ExecutionEngine {
                     EngineCommand::ConfirmDeploy => {
                         send_chat(
                             &self.sender,
-                            ChatMessage::System("confirmation received. deploying worker crew...".to_string()),
+                            ChatMessage::System("Confirmation received. Executing security review modules...".to_string()),
                         );
                         break;
                     }

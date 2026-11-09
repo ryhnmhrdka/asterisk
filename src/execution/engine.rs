@@ -81,15 +81,17 @@ impl ExecutionEngine {
         let plan = StrategyPlanner::create_plan(&profile);
         let _ = self.sender.send(EngineMessage::PlanUpdated(plan));
 
+        let code_graph = crate::core::CodeContextGraph::build_from_workspace(&self.target_dir);
+
         send_chat(
             &self.sender,
             ChatMessage::Agent {
                 sender: "orchestrator".to_string(),
                 text: format!(
-                    "discovered {} files across [{}] (docker: {}). task dependency graph constructed.",
+                    "Discovered {} files. Mapped **{} AST code nodes** & **{} call/taint edges** in `petgraph`.\nCode context graph & function-level reachability initialized.",
                     profile.total_files,
-                    profile.languages.join(", "),
-                    profile.has_docker
+                    code_graph.total_nodes(),
+                    code_graph.total_edges(),
                 ),
             },
         );
@@ -167,13 +169,26 @@ impl ExecutionEngine {
         all_findings.append(&mut sast_findings);
         all_findings.append(&mut net_findings);
 
+        // Evaluate Reachability on findings via CodeContextGraph
+        let mut reachable_findings = 0;
+        for f in &all_findings {
+            let sink_id = format!("{}:{}:sink", f.file_path.display(), f.line_number);
+            let verdict = code_graph.evaluate_reachability(&sink_id);
+            if matches!(verdict, crate::core::ReachabilityVerdict::Reachable { .. }) {
+                reachable_findings += 1;
+            }
+        }
+
         send_chat(
             &self.sender,
-            ChatMessage::ToolResult {
-                agent: "worker_crew".to_string(),
-                tool: "AuditAggregator".to_string(),
-                output: format!("found {} security vulnerabilities (SQLi, hardcoded tokens, 0.0.0.0 bind, CORS)", all_findings.len()),
-                elapsed_ms: Some(380),
+            ChatMessage::Agent {
+                sender: "triage".to_string(),
+                text: format!(
+                    "### Triage & Reachability Analysis\n- Scanned Findings: **{}**\n- Verified Reachable (True Positives): **{}** ($T_{{flow}} = S_{{input}} \\to D_{{sink}}$)\n- Filtered Noise / Unreachable: **{}**",
+                    all_findings.len(),
+                    reachable_findings,
+                    all_findings.len().saturating_sub(reachable_findings)
+                ),
             },
         );
 

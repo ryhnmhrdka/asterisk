@@ -256,3 +256,4 @@ mod tests {
         assert_eq!(extract_js_module("import { Button } from './components';"), None);
     }
 }
+

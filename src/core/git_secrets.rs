@@ -131,3 +131,4 @@ mod tests {
         assert!(detect_high_entropy_secret(low_ent).is_none());
     }
 }
+

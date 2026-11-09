@@ -2,7 +2,7 @@
 
 # TECHNICAL DESIGN DOCUMENT (TDD)
 
-## Sistem: SentinelHarness (AegisCode)
+## Sistem: Arterisk
 
 **Subjudul:** *Autonomous Pre-Production Code Defense, Supply-Chain Reachability & Security Audit Harness***Versi Dokumen:** 2.0 (Final Architecture Release)**Target Kategori:** Penangkalan Siber (Deteksi Dini, Pencegahan, dan Respons Otomatis Pra-Produksi)**Bahasa & Ekosistem Utama:** 100% Rust (*Single Static Binary Architecture*)**Antarmuka Pengguna:** Full Native TUI (*Split-Pane Command Center + Interactive Node-Graph Whiteboard Canvas*)
 
@@ -12,13 +12,13 @@
 
 ### 1.1 Tujuan Dokumen
 
-Dokumen ini menjadi acuan teknis tunggal bagi tim *engineer* dalam mengimplementasikan **SentinelHarness**—sebuah *AI Agent Execution Harness* yang bekerja di lingkungan pengembangan lokal (*developer workstation*) untuk mengaudit *source code*, memverifikasi keterjangkauan kerentanan (*function-level reachability*), mencegah penyusupan *malware* paket pihak ketiga, serta melakukan penambalan kode otomatis (*auto-hardening* & *vendor hotfix*) sebelum aplikasi dikompilasi menjadi APK atau di-*deploy* ke server produksi.
+Dokumen ini menjadi acuan teknis tunggal bagi tim *engineer* dalam mengimplementasikan **Asterisk**—sebuah *AI Agent Execution Harness* yang bekerja di lingkungan pengembangan lokal (*developer workstation*) untuk mengaudit *source code*, memverifikasi keterjangkauan kerentanan (*function-level reachability*), mencegah penyusupan *malware* paket pihak ketiga, serta melakukan penambalan kode otomatis (*auto-hardening* & *vendor hotfix*) sebelum aplikasi dikompilasi menjadi APK atau di-*deploy* ke server produksi.
 
 ### 1.2 Persamaan Dasar Arsitektur Sistem
 
 Sistem dirancang mengikuti prinsip pemisahan antara mesin penalaran probabilistik (LLM) dan infrastruktur eksekusi deterministik (*Harness*):
 
-$\text{SentinelHarness} = \text{Multi-Model Router} + \underbrace{(\text{GraphCore} + \text{MCP Tools} + \text{3-Tier Skills} + \text{Worktree Sandbox} + \text{Policy Gate} + \text{TUI Canvas})}_{\text{Deterministic Rust Execution Harness}}$
+$\text{Asterisk} = \text{Multi-Model Router} + \underbrace{(\text{GraphCore} + \text{MCP Tools} + \text{3-Tier Skills} + \text{Worktree Sandbox} + \text{Policy Gate} + \text{TUI Canvas})}_{\text{Deterministic Rust Execution Harness}}$
 
 ### 1.3 Keputusan Arsitektur Kunci (*Key Architectural Decisions*)
 
@@ -41,7 +41,7 @@ Seluruh kode sumber sistem ditulis dalam bahasa **Rust (Edition 2024, MSRV 1.82+
 | **File & Git Operations**       | `ignore` + `git2` + `similar`         | *libgit2 binding*, *diff engine*                  | Menyapu pohon direktori dengan menghormati `.gitignore`, membuat **Git Worktree** terisolasi, menyapu `--git-logs`, dan merender *diff*. |
 | **MCP & Agent Protocol**        | `model-context-protocol`              | JSON-RPC 2.0, `#[mcp_tool]`                       | Standarisasi pemanggilan alat oleh *Orchestrator* dan *Sub-Agent* dengan validasi skema JSON otomatis.                                   |
 | **Multi-Model AI Gateway**      | `reqwest` + `eventsource-stream`      | HTTP/2, SSE Streaming                             | Menghubungkan *Smart Router* ke model lokal (**Ollama**, **LM Studio**) maupun API Cloud (Claude, OpenAI, Gemini, DeepSeek).             |
-| **Embedded Storage**            | `rusqlite` (bundled)                  | Mode `WAL`, FTS5                                  | Menyimpan graf kode, status sesi, dan hasil audit dalam satu berkas `.sentinel/state.sqlite` tanpa instalasi server DB eksternal.        |
+| **Embedded Storage**            | `rusqlite` (bundled)                  | Mode `WAL`, FTS5                                  | Menyimpan graf kode, status sesi, dan hasil audit dalam satu berkas `.asterisk/state.sqlite` tanpa instalasi server DB eksternal.        |
 | **Serialization & Config**      | `serde` + `serde_json` + `serde_yaml` | Derive macros                                     | Mem-parsing *frontmatter* YAML pada `.skill.md`, membaca `SECURITY.md`, dan mengelola aliran *Async JSONL Mailbox*.                      |
 | **Telemetry & Audit Log**       | `tracing` + `opentelemetry`           | JSONL Exporter                                    | Mencatat seluruh jejak keputusan agen dan pemanggilan alat secara *append-only* untuk kepatuhan audit.                                   |
 
@@ -53,10 +53,10 @@ Seluruh kode sumber sistem ditulis dalam bahasa **Rust (Edition 2024, MSRV 1.82+
 
 ```markdown
 +===================================================================================================+
-|                             SENTINEL-HARNESS SINGLE BINARY (RUST)                                 |
+|                             ASTERISK SINGLE BINARY (RUST)                                 |
 |                                                                                                   |
 |  +---------------------------------------------------------------------------------------------+  |
-|  | [LAPISAN 3: PRESENTATION & STEERING LAYER] (crate: sentinel-tui | Thread Utama @ 60 FPS)     |  |
+|  | [LAPISAN 3: PRESENTATION & STEERING LAYER] (crate: asterisk-tui | Thread Utama @ 60 FPS)     |  |
 |  |                                                                                             |  |
 |  |  +---------------------------------------+   +-------------------------------------------+  |  |
 |  |  | Rataflow Interactive Whiteboard       |   | Split-Pane Inspector & Diff Viewer        |  |  |
@@ -72,7 +72,7 @@ Seluruh kode sumber sistem ditulis dalam bahasa **Rust (Edition 2024, MSRV 1.82+
 |                     UiActionChannel (mpsc)      |      TelemetryBroadcast (broadcast)             |
 |                                                 v                                                 |
 |  +---------------------------------------------------------------------------------------------+  |
-|  | [LAPISAN 2: HARNESS GOVERNANCE & ISOLATION KERNEL] (crate: sentinel-core | Tokio Runtime)   |  |
+|  | [LAPISAN 2: HARNESS GOVERNANCE & ISOLATION KERNEL] (crate: asterisk-core | Tokio Runtime)   |  |
 |  |                                                                                             |  |
 |  |  +-----------------------------+  +-----------------------------+  +---------------------+  |  |
 |  |  | Pre-Execution Policy Gate   |  | Background Sec Classifier   |  | Workspace Isolator  |  |  |
@@ -86,7 +86,7 @@ Seluruh kode sumber sistem ditulis dalam bahasa **Rust (Edition 2024, MSRV 1.82+
 |                                                 |                                                 |
 |                                                 v                                                 |
 |  +---------------------------------------------------------------------------------------------+  |
-|  | [LAPISAN 1: CORE INTELLIGENCE & DETERMINISTIC ENGINES] (crates: sentinel-agents & engines)  |  |
+|  | [LAPISAN 1: CORE INTELLIGENCE & DETERMINISTIC ENGINES] (crates: asterisk-agents & engines)  |  |
 |  |                                                                                             |  |
 |  |  +---------------------------------------+   +-------------------------------------------+  |  |
 |  |  | Orchestrator & Organic Spawner        |   | Multi-Model Smart Router (AI Gateway)     |  |  |
@@ -105,7 +105,7 @@ Seluruh kode sumber sistem ditulis dalam bahasa **Rust (Edition 2024, MSRV 1.82+
                                                   |
                                                   v
   +---------------------------------------------------------------------------------------------+
-  | [LOCAL WORKSPACE STORAGE & SANDBOX] (Direktori Proyek Lokal: ./.sentinel/ & ./SECURITY.md)   |
+  | [LOCAL WORKSPACE STORAGE & SANDBOX] (Direktori Proyek Lokal: ./.asterisk/ & ./SECURITY.md)   |
   |  ├─ state.sqlite (WAL Mode)     ├─ mailbox.jsonl & audit_trail.jsonl     ├─ worktrees/wt-*   |
   |  └─ skills/ (Tier-1 Built-in, Tier-2 User Import/Export, Tier-3 Orchestrator Synthesized)    |
   +---------------------------------------------------------------------------------------------+
@@ -118,7 +118,7 @@ Seluruh kode sumber sistem ditulis dalam bahasa **Rust (Edition 2024, MSRV 1.82+
 Diagram berikut menggambarkan interaksi antar-komponen saat pengguna mengeksekusi perintah `/audit --diff-scope=local` hingga penambalan otomatis (`/patch`):
 
 ```markdown
-Developer (TUI)       Sentinel-TUI        Sentinel-Core       GraphCore & MCP      Orchestrator      Sub-Agents (Isolated)
+Developer (TUI)       asterisk-TUI        asterisk-Core       GraphCore & MCP      Orchestrator      Sub-Agents (Isolated)
       |                    |                    |                    |                  |                      |
       |-- /audit --diff -->|                    |                    |                  |                      |
       |                    |-- UiAction::Audit->|                    |                  |                      |
@@ -160,7 +160,7 @@ Developer (TUI)       Sentinel-TUI        Sentinel-Core       GraphCore & MCP   
 
 ## 4. Desain Database & Struktur Penyimpanan Lokal (ERD & DDL)
 
-### 4.1 Struktur Direktori Penyimpanan Lokal (`.sentinel/`)
+### 4.1 Struktur Direktori Penyimpanan Lokal (`.asterisk/`)
 
 Saat pengguna menjalankan `/init-sec` pada suatu repositori proyek lokal, sistem membuat struktur direktori tersembunyi berikut:
 
@@ -168,7 +168,7 @@ Saat pengguna menjalankan `/init-sec` pada suatu repositori proyek lokal, sistem
 <project-root>/
 ├── SECURITY.md                        # Memori konteks arsitektur & AI Context Rules (Ground Truth)
 ├── patches/                           # Berkas .patch untuk Local Dependency Hotfix (tanpa upgrade)
-└── .sentinel/
+└── .asterisk/
     ├── config.toml                    # Konfigurasi provider model (Ollama/Cloud) & preferensi TUI
     ├── state.sqlite                   # Database utama (Graph Cache, Findings, Checkpoints)
     ├── state.sqlite-wal               # Write-Ahead Log untuk akses konkuren baca/tulis cepat
@@ -223,7 +223,7 @@ Saat pengguna menjalankan `/init-sec` pada suatu repositori proyek lokal, sistem
                                          +------------------------+
 ```
 
-### 4.3 Skema DDL SQLite (`crates/sentinel-core/migrations/001_init.sql`)
+### 4.3 Skema DDL SQLite (`crates/asterisk-core/migrations/001_init.sql`)
 
 ```sql
 PRAGMA journal_mode = WAL;
@@ -314,7 +314,7 @@ CREATE TABLE IF NOT EXISTS remediation_patches (
 
 ## 5. Spesifikasi 6 Modul Mesin Inti (*Core Engine Modules*)
 
-Enam modul berikut diimplementasikan di dalam *crate* `sentinel-graph` dan `sentinel-scanners` untuk menyuplai data deterministik berakurasi tinggi kepada *Sub-Agent*:
+Enam modul berikut diimplementasikan di dalam *crate* `asterisk-graph` dan `asterisk-scanners` untuk menyuplai data deterministik berakurasi tinggi kepada *Sub-Agent*:
 
 ### 5.1 Modul 1: `GraphCore AST & Taint Engine`
 
@@ -354,14 +354,14 @@ Enam modul berikut diimplementasikan di dalam *crate* `sentinel-graph` dan `sent
 
 ### 5.6 Modul 6: `Sandbox Auto-Hardening & Vendor Hotfix Engine`
 
-* **Auto-Hardening pada Source Code Sendiri:** Membuat *Git Worktree* baru di `.sentinel/worktrees/`, menulis skrip **Security Unit Test** yang menyimulasikan input berbahaya pada fungsi rentan, menulis kode perbaikan pada *source code*, dan mengeksekusi *test runner* lokal hingga lulus.
+* **Auto-Hardening pada Source Code Sendiri:** Membuat *Git Worktree* baru di `.asterisk/worktrees/`, menulis skrip **Security Unit Test** yang menyimulasikan input berbahaya pada fungsi rentan, menulis kode perbaikan pada *source code*, dan mengeksekusi *test runner* lokal hingga lulus.
 * **Vendor Hotfix Backport (Tanpa Upgrade Versi):** Apabila celah berada di dalam fungsi *library* pihak ketiga dan *upgrade* versi berisiko merusak kompilasi (*breaking changes*), agen memodifikasi fungsi *library* lokal secara terisolasi dan menghasilkan berkas tambalan standar di direktori `./patches/<nama-paket>+<versi>.patch` yang otomatis diterapkan saat proses *build*.
 
 ***
 
 ## 6. Desain Antarmuka Internal, Kontrak Event & Protokol MCP
 
-### 6.1 Definisi Tipe Data Komunikasi Asinkron (`crates/sentinel-core/src/events.rs`)
+### 6.1 Definisi Tipe Data Komunikasi Asinkron (`crates/asterisk-core/src/events.rs`)
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -482,7 +482,7 @@ Ubah penyambungan string (*string interpolation/concatenation*) menjadi *paramet
 
 ### 7.1 Arsitektur Rendering Tanpa Lag (*Event Drain & 60 FPS Render Loop*)
 
-Untuk memastikan kanvas *Whiteboard* di terminal berjalan semulus aplikasi grafis *native*, modul `sentinel-tui` menerapkan tiga mekanisme wajib:
+Untuk memastikan kanvas *Whiteboard* di terminal berjalan semulus aplikasi grafis *native*, modul `asterisk-tui` menerapkan tiga mekanisme wajib:
 
 1. **Aggressive Mouse & Key Event Draining:**
    Saat pengguna menggeser kanvas (*drag*) dengan *mouse* di terminal, terminal membombardir aplikasi dengan ratusan *event* `MouseEventKind::Moved` per detik. *Loop* utama TUI **wajib menguras habis seluruh antrean&#x20;*****event*****&#x20;****`crossterm::event::poll(Duration::ZERO)`****&#x20;terlebih dahulu**, menggabungkan delta pergeseran koordinat $(dx, dy)$, dan baru memanggil `terminal.draw()` satu kali per siklus *frame* (16,6 milidetik).
@@ -532,10 +532,10 @@ Untuk memastikan kanvas *Whiteboard* di terminal berjalan semulus aplikasi grafi
 ### 9.1 Tata Letak Cargo Workspace (`Cargo.toml`)
 
 ```
-sentinel-harness/
+asterisk/
 ├── Cargo.toml                         # Konfigurasi Workspace & profil rilis LTO
 ├── Cargo.lock
-├── SECURITY.md                        # Dogfooding: Aturan keamanan internal SentinelHarness
+├── SECURITY.md                        # Dogfooding: Aturan keamanan internal Asterisk
 ├── assets/
 │   └── builtin_skills/                # Tier-1 Default Skills (.skill.md) yang di-embed ke binary
 │       ├── owasp-sast-triage.skill.md
@@ -547,16 +547,16 @@ sentinel-harness/
 │       ├── contextual-code-hardening.skill.md
 │       └── vendor-hotfix-backport.skill.md
 └── crates/
-    ├── sentinel-cli/                  # Crate Binary Utama (Entrypoint CLI & inisialisasi sistem)
+    ├── asterisk-cli/                  # Crate Binary Utama (Entrypoint CLI & inisialisasi sistem)
     │   └── src/main.rs
-    ├── sentinel-tui/                  # Lapisan 3: Antarmuka Full-TUI & Rataflow Whiteboard
+    ├── asterisk-tui/                  # Lapisan 3: Antarmuka Full-TUI & Rataflow Whiteboard
     │   └── src/
     │       ├── lib.rs
     │       ├── app.rs                 # Loop utama 60 FPS, Mouse Drain, & Split-Pane Manager
     │       ├── whiteboard_canvas.rs   # Widget Rataflow, Sugiyama Auto-Layout, & Braille Edges
     │       ├── inspector_modal.rs     # Panel Diff Viewer, Triage Reasoning, & Unit-Test Log
     │       └── slash_repl.rs          # Parser & Autocomplete untuk /init-sec, /audit, /patch, dll.
-    ├── sentinel-core/                 # Lapisan 2: Kernel Harness, Policy Gate, SQLite & Worktree
+    ├── asterisk-core/                 # Lapisan 2: Kernel Harness, Policy Gate, SQLite & Worktree
     │   └── src/
     │       ├── lib.rs
     │       ├── policy_gate.rs         # Evaluasi Deny -> Ask -> Allow & Path Canonicalization
@@ -564,20 +564,20 @@ sentinel-harness/
     │       ├── worktree_sandbox.rs    # Manajemen Git Worktree & Checkpoint Rewind (git2)
     │       ├── mailbox.rs             # Asynchronous JSONL Mailbox Router
     │       └── storage.rs             # Koneksi SQLite WAL & OpenTelemetry Audit Exporter
-    ├── sentinel-graph/                # Modul Mesin 1 & 3: AST Parser, Call Graph & Reachability
+    ├── asterisk-graph/                # Modul Mesin 1 & 3: AST Parser, Call Graph & Reachability
     │   └── src/
     │       ├── lib.rs
     │       ├── ast_parser.rs          # Multi-language tree-sitter + rayon parallel scanner
     │       ├── call_graph.rs          # Konstruksi DiGraph petgraph & Taint Flow Tracker
     │       └── reachability.rs        # Function-level CVE Reachability & Phantom Dep Detector
-    ├── sentinel-scanners/             # Modul Mesin 4, 5 & 6: Malware, Secret, APK & Hotfix
+    ├── asterisk-scanners/             # Modul Mesin 4, 5 & 6: Malware, Secret, APK & Hotfix
     │   └── src/
     │       ├── lib.rs
     │       ├── malware_shield.rs      # Typosquatting & Pre-install Script Heuristic Analyzer
     │       ├── git_secrets.rs         # Git Revwalk (--git-logs) Secret & Entropy Scanner
     │       ├── apk_container.rs       # AndroidManifest.xml & Dockerfile Reachability Guard
     │       └── hotfix_patcher.rs      # Generator .patch untuk Local Dependency Backport
-    └── sentinel-agents/               # Lapisan 1: Orchestrator, Organic Spawner, Skills & Router
+    └── asterisk-agents/               # Lapisan 1: Orchestrator, Organic Spawner, Skills & Router
         └── src/
             ├── lib.rs
             ├── orchestrator.rs        # Threat Modeling, Task Dependency Graph & Skill Synthesizer
@@ -595,12 +595,12 @@ Agar menghasilkan satu berkas biner yang sangat kecil, cepat, dan siap didistrib
 [workspace]
 resolver = "2"
 members = [
-    "crates/sentinel-cli",
-    "crates/sentinel-tui",
-    "crates/sentinel-core",
-    "crates/sentinel-graph",
-    "crates/sentinel-scanners",
-    "crates/sentinel-agents",
+    "crates/asterisk-cli",
+    "crates/asterisk-tui",
+    "crates/asterisk-core",
+    "crates/asterisk-graph",
+    "crates/asterisk-scanners",
+    "crates/asterisk-agents",
 ]
 
 [profile.release]
@@ -613,7 +613,7 @@ strip = "symbols"         # Memangkas ukuran biner hingga < 20 MB
 
 ### 9.3 Urutan Fase Implementasi Tim (*Engineering Roadmap / Sprint Plan*)
 
-1. **Fase 1 (Pondasi Kernel & Storage):** Mengimplementasikan `sentinel-core` (skema SQLite WAL, `PolicyGate`, pembatasan direktori proyek, dan manajemen `git2` Worktree).
-2. **Fase 2 (Mesin Deterministik&#x20;****`GraphCore`****&#x20;& Scanners):** Mengimplementasikan `sentinel-graph` (`tree-sitter` + `petgraph` untuk *Call Graph*, *Taint Flow*, dan *Phantom Dependency*) serta `sentinel-scanners`.
-3. **Fase 3 (Orkestrasi Agen, MCP & 3-Tier Skills):** Mengimplementasikan `sentinel-agents` (konektor `SmartRouter` ke Ollama/Cloud, pemuat YAML `.skill.md` *on-demand*, serta siklus *Detection&#x20;**$\to$**&#x20;Triage&#x20;**$\to$**&#x20;Auto-Hardening*).
-4. **Fase 4 (Antarmuka Full-TUI & Whiteboard&#x20;****`rataflow`****):** Mengimplementasikan `sentinel-tui` (menghubungkan saluran telemetri ke kanvas interaktif `rataflow`, panel *Git Diff*, dan parser perintah `/slash commands`).
+1. **Fase 1 (Pondasi Kernel & Storage):** Mengimplementasikan asterisk`-core` (skema SQLite WAL, `PolicyGate`, pembatasan direktori proyek, dan manajemen `git2` Worktree).
+2. **Fase 2 (Mesin Deterministik&#x20;****`GraphCore`****&#x20;& Scanners):** Mengimplementasikan asterisk`-graph` (`tree-sitter` + `petgraph` untuk *Call Graph*, *Taint Flow*, dan *Phantom Dependency*) serta `asterisk-scanners`.
+3. **Fase 3 (Orkestrasi Agen, MCP & 3-Tier Skills):** Mengimplementasikan `asterisk-agents` (konektor `SmartRouter` ke Ollama/Cloud, pemuat YAML `.skill.md` *on-demand*, serta siklus *Detection&#x20;**$\to$**&#x20;Triage&#x20;**$\to$**&#x20;Auto-Hardening*).
+4. **Fase 4 (Antarmuka Full-TUI & Whiteboard&#x20;****`rataflow`****):** Mengimplementasikan `asterisk-tui` (menghubungkan saluran telemetri ke kanvas interaktif `rataflow`, panel *Git Diff*, dan parser perintah `/slash commands`).

@@ -66,16 +66,27 @@ impl SidebarView {
             Span::styled("(click row to inspect)", Style::default().fg(Color::Rgb(80, 80, 85))),
         ]));
 
-        let key_subagents = vec![
-            ("sub_secret_backend", "credential scanner", "backend/server.py"),
-            ("sub_sast_backend", "sast analyzer", "backend/server.py"),
-            ("sub_sast_frontend", "sast analyzer", "frontend/api.js"),
-        ];
+        let mut key_subagents: Vec<(String, String, String)> = nodes_info
+            .values()
+            .filter(|n| n.tier == "subagent")
+            .map(|n| {
+                let clean_label = n.label.lines().next().unwrap_or("module").to_string();
+                let clean_target = n.target_path.clone().unwrap_or_else(|| "-".to_string());
+                (n.id.clone(), clean_label, clean_target)
+            })
+            .collect();
+
+        key_subagents.sort_by(|a, b| a.0.cmp(&b.0));
+        let tray_items: Vec<(&str, &str, &str)> = key_subagents
+            .iter()
+            .take(3)
+            .map(|(id, label, target)| (id.as_str(), label.as_str(), target.as_str()))
+            .collect();
 
         let tray_area = chunks[0];
         let mut row_y = tray_area.y + 1;
 
-        for (id, name, target) in key_subagents {
+        for (id, name, target) in tray_items {
             let info = nodes_info.get(id);
             let (status_icon, status_color) = match info.map(|n| (n.status, n.is_paused)) {
                 Some((_, true)) => ("⏸", Color::DarkGray),

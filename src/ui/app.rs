@@ -81,7 +81,7 @@ impl App {
         let (cmd_tx, cmd_rx) = unbounded_channel();
 
         let profile = WorkspaceScanner::scan(&initial_target);
-        let nodes_info = AgentGraphBuilder::default_nodes_map();
+        let nodes_info = AgentGraphBuilder::build_nodes_for_workspace(&initial_target);
         let flow = AgentGraphBuilder::build_sprouted_graph(&nodes_info).unwrap_or_else(|_| Flow::new());
         let skills = SkillRegistry::new();
 
@@ -283,6 +283,8 @@ impl App {
                     }
                 }
                 self.profile = WorkspaceScanner::scan(&self.target_dir);
+                self.nodes_info = AgentGraphBuilder::build_nodes_for_workspace(&self.target_dir);
+                self.flow = AgentGraphBuilder::build_sprouted_graph(&self.nodes_info).unwrap_or_else(|_| Flow::new());
                 self.mode = AppMode::Workspace;
                 self.trigger_audit();
                 false
@@ -507,6 +509,8 @@ impl App {
                             }
                         }
                         self.profile = WorkspaceScanner::scan(&self.target_dir);
+                        self.nodes_info = AgentGraphBuilder::build_nodes_for_workspace(&self.target_dir);
+                        self.flow = AgentGraphBuilder::build_sprouted_graph(&self.nodes_info).unwrap_or_else(|_| Flow::new());
                         self.mode = AppMode::Workspace;
                         self.trigger_audit();
                     }

@@ -2,36 +2,242 @@ use crate::types::{AgentStatus, SproutedNodeInfo};
 use rataflow::{Edge, Flow, Node, StepEdge, TextContent};
 use ratatui::style::{Color, Modifier, Style};
 use std::collections::HashMap;
+use std::path::Path;
+use walkdir::WalkDir;
 
 pub struct AgentGraphBuilder;
 
 impl AgentGraphBuilder {
+    pub fn build_nodes_for_workspace(target_path: &Path) -> HashMap<String, SproutedNodeInfo> {
+        let mut map = HashMap::new();
+
+        // 1. Root Orchestrator
+        map.insert(
+            "orch".to_string(),
+            SproutedNodeInfo {
+                id: "orch".to_string(),
+                label: "orchestrator\ncore planner".to_string(),
+                tier: "planner".to_string(),
+                target_path: None,
+                status: AgentStatus::Idle,
+                details: "autonomous strategy planner & threat modeler".to_string(),
+                findings_count: 0,
+                is_paused: false,
+            },
+        );
+
+        // 2. Scan actual directories and source files (up to depth 2)
+        let mut discovered_folders = Vec::new();
+        let mut discovered_files = Vec::new();
+
+        for entry in WalkDir::new(target_path)
+            .max_depth(2)
+            .into_iter()
+            .filter_entry(|e| {
+                let name = e.file_name().to_string_lossy();
+                !name.starts_with('.') && name != "target" && name != "node_modules" && name != "vendor"
+            })
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+            if path == target_path {
+                continue;
+            }
+
+            let rel_path = path.strip_prefix(target_path).unwrap_or(path);
+            let rel_str = rel_path.to_string_lossy().to_string();
+
+            if entry.file_type().is_dir() && discovered_folders.len() < 4 {
+                discovered_folders.push(rel_str);
+            } else if entry.file_type().is_file() && discovered_files.len() < 4 {
+                discovered_files.push(rel_str);
+            }
+        }
+
+        // If no subfolders found, add root project folder
+        if discovered_folders.is_empty() {
+            discovered_folders.push("root/".to_string());
+        }
+
+        for (idx, folder) in discovered_folders.iter().enumerate() {
+            let id = format!("folder_{idx}");
+            map.insert(
+                id.clone(),
+                SproutedNodeInfo {
+                    id,
+                    label: format!("folder\n{folder}"),
+                    tier: "folder".to_string(),
+                    target_path: Some(folder.clone()),
+                    status: AgentStatus::Idle,
+                    details: format!("directory scope: {folder}"),
+                    findings_count: 0,
+                    is_paused: false,
+                },
+            );
+        }
+
+        for (idx, file) in discovered_files.iter().enumerate() {
+            let id = format!("file_{idx}");
+            map.insert(
+                id.clone(),
+                SproutedNodeInfo {
+                    id: id.clone(),
+                    label: format!("file\n{file}"),
+                    tier: "file".to_string(),
+                    target_path: Some(file.clone()),
+                    status: AgentStatus::Idle,
+                    details: format!("target source file: {file}"),
+                    findings_count: 0,
+                    is_paused: false,
+                },
+            );
+
+            // Active review module for this real file
+            let sec_id = format!("sub_sec_{idx}");
+            map.insert(
+                sec_id.clone(),
+                SproutedNodeInfo {
+                    id: sec_id,
+                    label: format!("secret scanner\n[{file}]"),
+                    tier: "subagent".to_string(),
+                    target_path: Some(file.clone()),
+                    status: AgentStatus::Idle,
+                    details: format!("credential audit on {file}"),
+                    findings_count: 0,
+                    is_paused: false,
+                },
+            );
+
+            let sast_id = format!("sub_sast_{idx}");
+            map.insert(
+                sast_id.clone(),
+                SproutedNodeInfo {
+                    id: sast_id,
+                    label: format!("sast analyzer\n[{file}]"),
+                    tier: "subagent".to_string(),
+                    target_path: Some(file.clone()),
+                    status: AgentStatus::Idle,
+                    details: format!("static vulnerability audit on {file}"),
+                    findings_count: 0,
+                    is_paused: false,
+                },
+            );
+        }
+
+        // 3. Remediation, Verification & Gate
+        map.insert(
+            "sub_patcher".to_string(),
+            SproutedNodeInfo {
+                id: "sub_patcher".to_string(),
+                label: "remediation engine\n[auto-hardening]".to_string(),
+                tier: "subagent".to_string(),
+                target_path: None,
+                status: AgentStatus::Idle,
+                details: "synthesizes non-breaking code patches in worktree".to_string(),
+                findings_count: 0,
+                is_paused: false,
+            },
+        );
+
+        map.insert(
+            "sub_verifier".to_string(),
+            SproutedNodeInfo {
+                id: "sub_verifier".to_string(),
+                label: "test verifier\n[security unit tests]".to_string(),
+                tier: "subagent".to_string(),
+                target_path: None,
+                status: AgentStatus::Idle,
+                details: "executes security verification tests in sandbox".to_string(),
+                findings_count: 0,
+                is_paused: false,
+            },
+        );
+
+        map.insert(
+            "defense_gate".to_string(),
+            SproutedNodeInfo {
+                id: "defense_gate".to_string(),
+                label: "pre-prod defense gate\n[build guard]".to_string(),
+                tier: "gate".to_string(),
+                target_path: None,
+                status: AgentStatus::Idle,
+                details: "certifies security posture prior to production build".to_string(),
+                findings_count: 0,
+                is_paused: false,
+            },
+        );
+
+        map
+    }
+
+    pub fn default_nodes_map() -> HashMap<String, SproutedNodeInfo> {
+        Self::build_nodes_for_workspace(Path::new("."))
+    }
+
     pub fn build_sprouted_graph(
         nodes_info: &HashMap<String, SproutedNodeInfo>,
     ) -> Result<Flow<TextContent, StepEdge>, rataflow::Error> {
         let mut nodes = Vec::new();
 
-        // Node definitions with coordinates in horizontal layout (Tiered Left to Right)
-        let layout_coords: Vec<(&str, (f64, f64), &str)> = vec![
-            ("orch", (2.0, 13.0), "orchestrator\ncore planner"),
-            ("folder_backend", (26.0, 6.0), "folder\nbackend/"),
-            ("folder_frontend", (26.0, 20.0), "folder\nfrontend/"),
-            ("file_server", (50.0, 6.0), "file\nserver.py"),
-            ("file_api", (50.0, 20.0), "file\napi.js"),
-            ("sub_secret_backend", (76.0, 2.0), "secret hunter\n[server.py]"),
-            ("sub_sast_backend", (76.0, 7.0), "sast analyzer\n[server.py]"),
-            ("sub_net_backend", (76.0, 12.0), "network prober\n[server.py]"),
-            ("sub_sast_frontend", (76.0, 18.0), "sast analyzer\n[api.js]"),
-            ("sub_net_frontend", (76.0, 23.0), "network prober\n[api.js]"),
-            ("sub_patcher", (106.0, 8.0), "auto-hardening\n[diff patcher]"),
-            ("sub_verifier", (106.0, 18.0), "test verifier\n[unit tests]"),
-            ("defense_gate", (136.0, 13.0), "pre-prod defense gate\n[build guard]"),
-        ];
+        // Categorize into horizontal columns
+        let mut folder_nodes: Vec<&SproutedNodeInfo> = Vec::new();
+        let mut file_nodes: Vec<&SproutedNodeInfo> = Vec::new();
+        let mut subagent_nodes: Vec<&SproutedNodeInfo> = Vec::new();
+
+        for n in nodes_info.values() {
+            if n.tier == "folder" {
+                folder_nodes.push(n);
+            } else if n.tier == "file" {
+                file_nodes.push(n);
+            } else if n.tier == "subagent" && !n.id.starts_with("sub_patcher") && !n.id.starts_with("sub_verifier") {
+                subagent_nodes.push(n);
+            }
+        }
+
+        folder_nodes.sort_by_key(|n| &n.id);
+        file_nodes.sort_by_key(|n| &n.id);
+        subagent_nodes.sort_by_key(|n| &n.id);
+
+        let mut layout_coords: Vec<(String, (f64, f64), String)> = Vec::new();
+
+        // Column 0: Orchestrator
+        layout_coords.push(("orch".to_string(), (2.0, 14.0), "orchestrator\ncore planner".to_string()));
+
+        // Column 1: Folders (x = 28.0)
+        let folder_count = folder_nodes.len().max(1);
+        let folder_gap = 24.0 / (folder_count as f64);
+        for (i, f) in folder_nodes.iter().enumerate() {
+            let y = 6.0 + (i as f64) * folder_gap;
+            layout_coords.push((f.id.clone(), (28.0, y), f.label.clone()));
+        }
+
+        // Column 2: Files (x = 54.0)
+        let file_count = file_nodes.len().max(1);
+        let file_gap = 24.0 / (file_count as f64);
+        for (i, f) in file_nodes.iter().enumerate() {
+            let y = 6.0 + (i as f64) * file_gap;
+            layout_coords.push((f.id.clone(), (54.0, y), f.label.clone()));
+        }
+
+        // Column 3: Review Modules (x = 82.0)
+        let sub_count = subagent_nodes.len().max(1);
+        let sub_gap = 26.0 / (sub_count as f64);
+        for (i, s) in subagent_nodes.iter().enumerate() {
+            let y = 3.0 + (i as f64) * sub_gap;
+            layout_coords.push((s.id.clone(), (82.0, y), s.label.clone()));
+        }
+
+        // Column 4: Remediation & Verification (x = 114.0)
+        layout_coords.push(("sub_patcher".to_string(), (114.0, 9.0), "remediation\n[auto-hardening]".to_string()));
+        layout_coords.push(("sub_verifier".to_string(), (114.0, 19.0), "test verifier\n[security unit tests]".to_string()));
+
+        // Column 5: Defense Gate (x = 146.0)
+        layout_coords.push(("defense_gate".to_string(), (146.0, 14.0), "pre-prod defense gate\n[build guard]".to_string()));
 
         for (id, pos, label) in &layout_coords {
             let default_info = SproutedNodeInfo {
-                id: id.to_string(),
-                label: label.to_string(),
+                id: id.clone(),
+                label: label.clone(),
                 tier: "worker".to_string(),
                 target_path: None,
                 status: AgentStatus::Idle,
@@ -40,7 +246,7 @@ impl AgentGraphBuilder {
                 is_paused: false,
             };
 
-            let info = nodes_info.get(*id).unwrap_or(&default_info);
+            let info = nodes_info.get(id).unwrap_or(&default_info);
 
             let (border_color, status_text, is_bold) = if info.is_paused {
                 (Color::DarkGray, "paused", false)
@@ -58,7 +264,7 @@ impl AgentGraphBuilder {
             };
 
             let display_text = format!("{}\n[{}]", label, status_text);
-            let mut node = Node::from_text(*id, *pos, display_text);
+            let mut node = Node::from_text(id.clone(), *pos, display_text);
             node.content.border_style = Some(Style::default().fg(border_color));
 
             let mut text_style = Style::default().fg(if is_bold { Color::White } else { Color::Gray });
@@ -69,80 +275,49 @@ impl AgentGraphBuilder {
             nodes.push(node);
         }
 
-        // Horizontal Edge Definitions
-        let raw_edges = vec![
-            ("e_orch_backend", "orch", "folder_backend"),
-            ("e_orch_frontend", "orch", "folder_frontend"),
-            ("e_back_server", "folder_backend", "file_server"),
-            ("e_front_api", "folder_frontend", "file_api"),
-            ("e_serv_secret", "file_server", "sub_secret_backend"),
-            ("e_serv_sast", "file_server", "sub_sast_backend"),
-            ("e_serv_net", "file_server", "sub_net_backend"),
-            ("e_api_sast", "file_api", "sub_sast_frontend"),
-            ("e_api_net", "file_api", "sub_net_frontend"),
-            ("e_sub_patch1", "sub_secret_backend", "sub_patcher"),
-            ("e_sub_patch2", "sub_sast_backend", "sub_patcher"),
-            ("e_sub_patch3", "sub_net_backend", "sub_patcher"),
-            ("e_sub_patch4", "sub_sast_frontend", "sub_patcher"),
-            ("e_sub_patch5", "sub_net_frontend", "sub_patcher"),
-            ("e_patch_verify", "sub_patcher", "sub_verifier"),
-            ("e_verify_gate", "sub_verifier", "defense_gate"),
-        ];
-
+        // Horizontal Edges
         let mut edges: Vec<Edge<StepEdge>> = Vec::new();
-        for (edge_id, src, dst) in raw_edges {
-            let src_status = nodes_info.get(src).map(|n| (n.status, n.is_paused));
-            let dst_status = nodes_info.get(dst).map(|n| (n.status, n.is_paused));
 
-            // Determine if edge should be animated (only when source or destination is currently running and not paused)
-            let is_animating = match (src_status, dst_status) {
-                (Some((AgentStatus::Running, false)), _) => true,
-                (_, Some((AgentStatus::Running, false))) => true,
-                _ => false,
-            };
-
-            let edge = Edge::new(edge_id, src, dst).with_animated(is_animating);
-            edges.push(edge);
+        // 1. Orch -> Folders
+        for f in &folder_nodes {
+            edges.push(create_step_edge(&format!("e_orch_{}", f.id), "orch", &f.id, nodes_info));
         }
+
+        // 2. Folders -> Files
+        for (i, file) in file_nodes.iter().enumerate() {
+            if let Some(folder) = folder_nodes.get(i % folder_nodes.len().max(1)) {
+                edges.push(create_step_edge(&format!("e_fold_{}", file.id), &folder.id, &file.id, nodes_info));
+            }
+        }
+
+        // 3. Files -> Subagents
+        for (i, sub) in subagent_nodes.iter().enumerate() {
+            if let Some(file) = file_nodes.get(i % file_nodes.len().max(1)) {
+                edges.push(create_step_edge(&format!("e_file_{}", sub.id), &file.id, &sub.id, nodes_info));
+            }
+            // 4. Subagents -> Patcher
+            edges.push(create_step_edge(&format!("e_sub_patch_{}", sub.id), &sub.id, "sub_patcher", nodes_info));
+        }
+
+        // 5. Patcher -> Verifier -> Gate
+        edges.push(create_step_edge("e_patch_verify", "sub_patcher", "sub_verifier", nodes_info));
+        edges.push(create_step_edge("e_verify_gate", "sub_verifier", "defense_gate", nodes_info));
 
         let mut flow = Flow::with_graph(nodes, edges)?;
         flow.request_fit_view();
         Ok(flow)
     }
+}
 
-    pub fn default_nodes_map() -> HashMap<String, SproutedNodeInfo> {
-        let mut map = HashMap::new();
-        let items = vec![
-            ("orch", "orchestrator", "core planner", None),
-            ("folder_backend", "folder", "backend module", Some("backend/")),
-            ("folder_frontend", "folder", "frontend module", Some("frontend/")),
-            ("file_server", "file", "server.py", Some("backend/server.py")),
-            ("file_api", "file", "api.js", Some("frontend/api.js")),
-            ("sub_secret_backend", "subagent", "secret hunter", Some("backend/server.py")),
-            ("sub_sast_backend", "subagent", "sast analyzer", Some("backend/server.py")),
-            ("sub_net_backend", "subagent", "network prober", Some("backend/server.py")),
-            ("sub_sast_frontend", "subagent", "sast analyzer", Some("frontend/api.js")),
-            ("sub_net_frontend", "subagent", "network prober", Some("frontend/api.js")),
-            ("sub_patcher", "subagent", "auto-hardening patcher", None),
-            ("sub_verifier", "subagent", "test verifier", None),
-            ("defense_gate", "gate", "pre-production gate", None),
-        ];
+fn create_step_edge(edge_id: &str, src: &str, dst: &str, nodes_info: &HashMap<String, SproutedNodeInfo>) -> Edge<StepEdge> {
+    let src_status = nodes_info.get(src).map(|n| (n.status, n.is_paused));
+    let dst_status = nodes_info.get(dst).map(|n| (n.status, n.is_paused));
 
-        for (id, tier, label, path) in items {
-            map.insert(
-                id.to_string(),
-                SproutedNodeInfo {
-                    id: id.to_string(),
-                    label: label.to_string(),
-                    tier: tier.to_string(),
-                    target_path: path.map(String::from),
-                    status: AgentStatus::Idle,
-                    details: format!("task assigned: {label}"),
-                    findings_count: 0,
-                    is_paused: false,
-                },
-            );
-        }
-        map
-    }
+    let is_animating = match (src_status, dst_status) {
+        (Some((AgentStatus::Running, false)), _) => true,
+        (_, Some((AgentStatus::Running, false))) => true,
+        _ => false,
+    };
+
+    Edge::new(edge_id.to_string(), src.to_string(), dst.to_string()).with_animated(is_animating)
 }

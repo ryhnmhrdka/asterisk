@@ -72,11 +72,13 @@ impl ExecutionEngine {
         let profile = WorkspaceScanner::scan(&self.target_dir);
         let _ = self.sender.send(EngineMessage::WorkspaceUpdated(profile.clone()));
 
-        // 2. Sprout Folders and Files
-        set_node(&self.sender, "folder_backend", AgentStatus::Running);
-        set_node(&self.sender, "folder_frontend", AgentStatus::Running);
-        set_node(&self.sender, "file_server", AgentStatus::Running);
-        set_node(&self.sender, "file_api", AgentStatus::Running);
+        // 2. Sprout Folders and Files dynamically from real workspace
+        let workspace_nodes = crate::orchestrator::AgentGraphBuilder::build_nodes_for_workspace(&self.target_dir);
+        for id in workspace_nodes.keys() {
+            if id.starts_with("folder_") || id.starts_with("file_") {
+                set_node(&self.sender, id, AgentStatus::Running);
+            }
+        }
 
         let plan = StrategyPlanner::create_plan(&profile);
         let _ = self.sender.send(EngineMessage::PlanUpdated(plan));
@@ -97,10 +99,11 @@ impl ExecutionEngine {
         );
         sleep(Duration::from_millis(300)).await;
 
-        set_node(&self.sender, "folder_backend", AgentStatus::Success);
-        set_node(&self.sender, "folder_frontend", AgentStatus::Success);
-        set_node(&self.sender, "file_server", AgentStatus::Success);
-        set_node(&self.sender, "file_api", AgentStatus::Success);
+        for id in workspace_nodes.keys() {
+            if id.starts_with("folder_") || id.starts_with("file_") {
+                set_node(&self.sender, id, AgentStatus::Success);
+            }
+        }
 
         // 3. Request User Confirmation in Chatbot Sidebar
         set_node(&self.sender, "orch", AgentStatus::WaitingConfirmation);
@@ -131,43 +134,47 @@ impl ExecutionEngine {
             }
         }
 
-        // 4. Subagents Sprout & Run (Parallel simulated execution with animated edges!)
+        // 4. Subagents Sprout & Run (Parallel execution across actual workspace modules)
         set_node(&self.sender, "orch", AgentStatus::Running);
-        set_node(&self.sender, "sub_secret_backend", AgentStatus::Running);
-        set_node(&self.sender, "sub_sast_backend", AgentStatus::Running);
-        set_node(&self.sender, "sub_net_backend", AgentStatus::Running);
-        set_node(&self.sender, "sub_sast_frontend", AgentStatus::Running);
-        set_node(&self.sender, "sub_net_frontend", AgentStatus::Running);
+        for id in workspace_nodes.keys() {
+            if id.starts_with("sub_") && id != "sub_patcher" && id != "sub_verifier" {
+                set_node(&self.sender, id, AgentStatus::Running);
+            }
+        }
 
         // Tool calls logged in chat
         send_chat(
             &self.sender,
             ChatMessage::ToolCall {
-                agent: "secret_hunter".to_string(),
-                tool: "ShannonEntropyScanner".to_string(),
-                input: "backend/server.py".to_string(),
+                agent: "secret_scanner".to_string(),
+                tool: "GitHistoryAndShannonEntropy".to_string(),
+                input: self.target_dir.display().to_string(),
             },
         );
         send_chat(
             &self.sender,
             ChatMessage::ToolCall {
-                agent: "sast_analyzer".to_string(),
-                tool: "SemanticASTLinter".to_string(),
-                input: "backend/server.py, frontend/api.js".to_string(),
+                agent: "sca_analyzer".to_string(),
+                tool: "ManifestAndPhantomDependencyAuditor".to_string(),
+                input: self.target_dir.display().to_string(),
             },
         );
 
         sleep(Duration::from_millis(400)).await;
 
-        // Collect findings from actual scanner engines
+        // Collect findings from actual scanner engines + Git history & SCA
         let mut secret_findings = SecretHunterAgent::scan(&self.target_dir);
         let mut sast_findings = SastAnalyzerAgent::scan(&self.target_dir);
         let mut net_findings = NetworkProberAgent::scan(&self.target_dir);
+        let mut git_secrets = crate::core::GitHistorySecretMiner::scan_commit_history(&self.target_dir);
+        let mut sca_findings = crate::core::ScaDependencyAuditor::audit(&self.target_dir);
 
         let mut all_findings = Vec::new();
         all_findings.append(&mut secret_findings);
         all_findings.append(&mut sast_findings);
         all_findings.append(&mut net_findings);
+        all_findings.append(&mut git_secrets);
+        all_findings.append(&mut sca_findings);
 
         // Evaluate Reachability on findings via CodeContextGraph
         let mut reachable_findings = 0;
@@ -192,11 +199,11 @@ impl ExecutionEngine {
             },
         );
 
-        set_node(&self.sender, "sub_secret_backend", AgentStatus::Success);
-        set_node(&self.sender, "sub_sast_backend", AgentStatus::Success);
-        set_node(&self.sender, "sub_net_backend", AgentStatus::Success);
-        set_node(&self.sender, "sub_sast_frontend", AgentStatus::Success);
-        set_node(&self.sender, "sub_net_frontend", AgentStatus::Success);
+        for id in workspace_nodes.keys() {
+            if id.starts_with("sub_") && id != "sub_patcher" && id != "sub_verifier" {
+                set_node(&self.sender, id, AgentStatus::Success);
+            }
+        }
 
         let _ = self.sender.send(EngineMessage::FindingsUpdated(all_findings.clone()));
 

@@ -2,7 +2,7 @@
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'; // CWE-295: Disabled TLS check
 
-const API_BASE = "http://api.backend.kartikacyber.local/v1"; // CWE-319: Cleartext
+const API_BASE = "http://api.backend.internal.net/v1"; // CWE-319: Cleartext
 
 const corsConfig = {
     origin: "*", // CWE-942: Permissive CORS Wildcard

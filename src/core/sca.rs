@@ -65,65 +65,43 @@ impl ScaDependencyAuditor {
 }
 
 fn audit_cargo_dependencies(content: &str, findings: &mut Vec<VulnerabilityFinding>) {
-    // Known vulnerable crate versions (exact version match)
-    let known_vulnerabilities = [
-        ("openssl", "0.10.30", "RUSTSEC-2022-0040", Severity::High),
-        ("tokio", "0.2.20", "RUSTSEC-2020-0010", Severity::Medium),
-    ];
-
-    // Parse TOML package blocks accurately
-    let mut current_pkg: Option<String> = None;
+    // Check for insecure cleartext git dependencies or unpinned wildcards
     for (line_idx, line) in content.lines().enumerate() {
         let trimmed = line.trim();
-        if trimmed.starts_with("name = ") {
-            let name = trimmed.trim_start_matches("name = ").trim_matches('"');
-            current_pkg = Some(name.to_string());
-        } else if trimmed.starts_with("version = ") {
-            let ver = trimmed.trim_start_matches("version = ").trim_matches('"');
-            if let Some(pkg) = &current_pkg {
-                for (target_pkg, target_ver, advisory, sev) in &known_vulnerabilities {
-                    if pkg == target_pkg && ver == *target_ver {
-                        findings.push(VulnerabilityFinding {
-                            id: format!("SCA-RUST-{:04}", findings.len() + 1),
-                            title: format!("Vulnerable Supply-Chain Dependency: {pkg} v{ver} ({advisory})"),
-                            cwe: "CWE-1395".to_string(),
-                            severity: *sev,
-                            file_path: PathBuf::from("Cargo.lock"),
-                            line_number: line_idx + 1,
-                            snippet: format!("name = \"{pkg}\"\nversion = \"{ver}\""),
-                            description: format!("Third-party package '{pkg}' v{ver} contains known security advisory {advisory}."),
-                            recommendation: format!("Upgrade {pkg} to latest secure release."),
-                            patched: false,
-                        });
-                    }
-                }
-            }
-        } else if trimmed == "[[package]]" {
-            current_pkg = None;
+        if trimmed.starts_with("source = ") && trimmed.contains("http://") {
+            findings.push(VulnerabilityFinding {
+                id: format!("SCA-RUST-{:04}", findings.len() + 1),
+                title: "Insecure Cleartext Transport for Crate Registry".to_string(),
+                cwe: "CWE-319".to_string(),
+                severity: Severity::High,
+                file_path: PathBuf::from("Cargo.lock"),
+                line_number: line_idx + 1,
+                snippet: trimmed.to_string(),
+                description: "Cargo package configured with insecure cleartext HTTP registry source.".to_string(),
+                recommendation: "Enforce HTTPS URL for all package sources in Cargo configuration.".to_string(),
+                patched: false,
+            });
         }
     }
 }
 
 fn audit_node_dependencies(content: &str, findings: &mut Vec<VulnerabilityFinding>) {
-    // Known vulnerable npm package versions
-    let known_node_vulns = [
-        ("lodash", "4.17.20", "CVE-2021-23337: Prototype Pollution"),
-        ("axios", "0.21.0", "CVE-2020-28168: SSRF Vulnerability"),
-    ];
-
-    for (pkg, ver, advisory) in known_node_vulns {
-        let pattern = format!("\"{pkg}\": \"{ver}\"");
-        if content.contains(&pattern) {
+    // Audit package.json for dangerous wildcard version specifications or cleartext URLs
+    for (line_idx, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        if (trimmed.contains("\": \"*\"") || trimmed.contains("\": \"latest\""))
+            && !trimmed.starts_with("//")
+        {
             findings.push(VulnerabilityFinding {
                 id: format!("SCA-NODE-{:04}", findings.len() + 1),
-                title: format!("Vulnerable Supply-Chain Package: {pkg} v{ver}"),
-                cwe: "CWE-1395".to_string(),
-                severity: Severity::High,
+                title: "Unpinned Wildcard Dependency in package.json".to_string(),
+                cwe: "CWE-1104".to_string(),
+                severity: Severity::Medium,
                 file_path: PathBuf::from("package.json"),
-                line_number: 1,
-                snippet: pattern,
-                description: format!("NPM package '{pkg}' v{ver} is affected by {advisory}."),
-                recommendation: format!("Upgrade '{pkg}' to a patched version in package.json."),
+                line_number: line_idx + 1,
+                snippet: trimmed.to_string(),
+                description: "Dependency specifies wildcard ('*') or 'latest' version, exposing builds to breaking upstream changes and supply chain injection.".to_string(),
+                recommendation: "Pin explicit semantic version ranges (e.g. ^1.2.3 or exact 1.2.3) in package.json.".to_string(),
                 patched: false,
             });
         }
@@ -131,21 +109,24 @@ fn audit_node_dependencies(content: &str, findings: &mut Vec<VulnerabilityFindin
 }
 
 fn audit_python_dependencies(content: &str, findings: &mut Vec<VulnerabilityFinding>) {
-    for line in content.lines() {
+    // Audit requirements.txt for unpinned packages or insecure external indexes
+    for (line_idx, line) in content.lines().enumerate() {
         let trimmed = line.trim();
-        if trimmed.starts_with("pickle5") || trimmed.starts_with("pyyaml<5.4") {
-            findings.push(VulnerabilityFinding {
-                id: format!("SCA-PY-{:04}", findings.len() + 1),
-                title: format!("Unsafe Deserialization Package: {trimmed}"),
-                cwe: "CWE-502".to_string(),
-                severity: Severity::High,
-                file_path: PathBuf::from("requirements.txt"),
-                line_number: 1,
-                snippet: trimmed.to_string(),
-                description: "Vulnerable Python package with unauthenticated remote code execution risk.".to_string(),
-                recommendation: "Upgrade or replace with secure serialiser (JSON or protobuf).".to_string(),
-                patched: false,
-            });
+        if trimmed.starts_with("--index-url") || trimmed.starts_with("--extra-index-url") {
+            if trimmed.contains("http://") {
+                findings.push(VulnerabilityFinding {
+                    id: format!("SCA-PY-{:04}", findings.len() + 1),
+                    title: "Cleartext Insecure PyPI Index URL".to_string(),
+                    cwe: "CWE-319".to_string(),
+                    severity: Severity::Critical,
+                    file_path: PathBuf::from("requirements.txt"),
+                    line_number: line_idx + 1,
+                    snippet: trimmed.to_string(),
+                    description: "requirements.txt specifies an unencrypted HTTP package index, exposing pip install to MitM package tampering.".to_string(),
+                    recommendation: "Enforce HTTPS for all custom PyPI index URLs.".to_string(),
+                    patched: false,
+                });
+            }
         }
     }
 }

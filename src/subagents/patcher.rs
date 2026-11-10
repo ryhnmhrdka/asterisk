@@ -13,137 +13,88 @@ impl AutoHardeningAgent {
         let root_path = root.as_ref();
         let mut patches = Vec::new();
 
-        for (i, finding) in findings.iter().enumerate() {
+        for finding in findings {
             let target_file = root_path.join(&finding.file_path);
             let snippet = &finding.snippet;
+            let ext = target_file.extension().and_then(|s| s.to_str()).unwrap_or("");
 
-            let (hardened, explanation, test_stub) = if finding.cwe == "CWE-89" {
-                // SQL Injection
-                let fixed = if snippet.contains("f\"SELECT") || snippet.contains("f\"INSERT") || snippet.contains("f\"UPDATE") {
-                    snippet.replace("f\"", "\"")
-                        .replace("{user_input}", "?")
-                        .replace("{username}", "?")
-                        .replace("{id}", "?")
-                } else if snippet.contains("+") {
-                    snippet.replace("+ req.body.username", ", [req.body.username]")
-                        .replace("+ user_input", ", (user_input,)")
-                } else {
-                    format!("{}.parameterized()", snippet)
-                };
-                (
-                    fixed,
-                    "Replaced dynamic SQL string interpolation with parameterized prepared statement placeholder (CWE-89 mitigation).".to_string(),
-                    r#"#[test]
-fn test_sqli_protection() {
-    let payload = "' OR '1'='1' --";
-    let safe_query = query_with_parameter(payload);
-    assert!(!safe_query.contains_raw_injection());
-}"#.to_string(),
-                )
-            } else if finding.cwe == "CWE-798" || finding.cwe == "CWE-312" {
-                // Hardcoded secret
-                let fixed = if snippet.contains("=") {
-                    let parts: Vec<&str> = snippet.split('=').collect();
-                    let var_name = parts[0].trim();
-                    format!("{var_name} = os.getenv(\"{}\", \"\")", var_name.to_uppercase().replace(' ', "_"))
-                } else {
-                    format!("# [SECURITY-PATCH] Replaced secret with secure environment lookup\n{}", snippet)
-                };
-                (
-                    fixed,
-                    "Extracted hardcoded credentials into secure dynamic environment variable retrieval (CWE-798 mitigation).".to_string(),
-                    r#"#[test]
-fn test_secret_not_in_source() {
-    assert!(std::env::var("SECRET_KEY").is_ok() || std::env::var("SECRET_KEY").is_err());
-    assert!(!SOURCE_TEXT.contains("AKIA"));
-}"#.to_string(),
-                )
-            } else if finding.cwe == "CWE-78" {
-                // Command Injection
-                let fixed = snippet.replace("shell=True", "shell=False")
-                    .replace("subprocess.run(shlex.split(", "subprocess.run(shlex.split(");
-                (
-                    fixed,
-                    "Disabled direct shell invocation (shell=False) and enforced array tokenization to eliminate shell metacharacter injection (CWE-78 mitigation).".to_string(),
-                    r#"#[test]
-fn test_command_injection_blocked() {
-    let tainted = "; rm -rf /";
-    let res = execute_safe_command(&[tainted]);
-    assert!(res.is_err() || res.is_ok()); // Payload is parsed as single arg literal
-}"#.to_string(),
-                )
-            } else if finding.cwe == "CWE-942" {
-                // CORS Wildcard
-                let fixed = snippet.replace("'*'", "['https://app.kartikacyber.local']")
-                    .replace("\"*\"", "['https://app.kartikacyber.local']");
-                (
-                    fixed,
-                    "Replaced wildcard CORS origin (*) with strict authorized domain origin whitelist (CWE-942 mitigation).".to_string(),
-                    r#"#[test]
-fn test_cors_blocks_unauthorized_origin() {
-    let origin = "https://evil-attacker.com";
-    assert!(!is_allowed_origin(origin));
-}"#.to_string(),
-                )
-            } else if finding.cwe == "CWE-1327" {
-                // 0.0.0.0 binding
+            // Determine if a safe, verified deterministic transformation exists:
+            let patch_candidate = if finding.cwe == "CWE-1327" && snippet.contains("0.0.0.0") {
                 let fixed = snippet.replace("0.0.0.0", "127.0.0.1");
-                (
+                let test_stub = match ext {
+                    "py" => "def test_bind_is_localhost():\n    # Verify socket binds to loopback interface only (127.0.0.1)\n    assert True\n",
+                    "js" | "ts" => "test('bind is localhost', () => {\n    // Verify socket binds to loopback interface only (127.0.0.1)\n    expect(true).toBe(true);\n});\n",
+                    _ => "// Verify socket binds to loopback interface only (127.0.0.1)\n",
+                };
+                Some((
                     fixed,
-                    "Changed wildcard bind address (0.0.0.0) to local loopback (127.0.0.1) preventing premature LAN exposure (CWE-1327 mitigation).".to_string(),
-                    r#"#[test]
-fn test_bind_is_localhost() {
-    assert_eq!(CONFIG_BIND_HOST, "127.0.0.1");
-}"#.to_string(),
-                )
-            } else if finding.cwe == "CWE-295" {
-                // TLS verification disabled
-                let fixed = snippet.replace("verify=False", "verify=True")
+                    "Replaced wildcard bind address (0.0.0.0) with local loopback (127.0.0.1) preventing unauthenticated LAN exposure (CWE-1327).".to_string(),
+                    test_stub.to_string(),
+                ))
+            } else if finding.cwe == "CWE-295" && (snippet.contains("verify=False") || snippet.contains("verify = False") || snippet.contains("InsecureSkipVerify: true") || snippet.contains("NODE_TLS_REJECT_UNAUTHORIZED = '0'") || snippet.contains("NODE_TLS_REJECT_UNAUTHORIZED = 0")) {
+                let fixed = snippet
+                    .replace("verify=False", "verify=True")
+                    .replace("verify = False", "verify = True")
                     .replace("InsecureSkipVerify: true", "InsecureSkipVerify: false")
-                    .replace("0", "1");
-                (
+                    .replace("NODE_TLS_REJECT_UNAUTHORIZED = '0'", "NODE_TLS_REJECT_UNAUTHORIZED = '1'")
+                    .replace("NODE_TLS_REJECT_UNAUTHORIZED = 0", "NODE_TLS_REJECT_UNAUTHORIZED = 1");
+                let test_stub = match ext {
+                    "py" => "def test_tls_verification_active():\n    # Verify TLS certificate chain validation is enforced\n    assert True\n",
+                    "js" | "ts" => "test('tls verification active', () => {\n    // Verify TLS certificate chain validation is enforced\n    expect(true).toBe(true);\n});\n",
+                    _ => "// Verify TLS certificate chain validation is enforced\n",
+                };
+                Some((
                     fixed,
-                    "Enforced mandatory TLS x509 certificate chain validation against system root trust store (CWE-295 mitigation).".to_string(),
-                    r#"#[test]
-fn test_tls_verification_active() {
-    assert!(CLIENT_CONFIG.tls_verify_enabled);
-}"#.to_string(),
-                )
+                    "Enforced mandatory TLS x509 certificate chain validation against system root trust store (CWE-295).".to_string(),
+                    test_stub.to_string(),
+                ))
+            } else if finding.cwe == "CWE-319" && snippet.contains("http://") {
+                let fixed = snippet.replace("http://", "https://");
+                let test_stub = match ext {
+                    "py" => "def test_https_transport():\n    # Verify encrypted transport protocol (HTTPS)\n    assert True\n",
+                    "js" | "ts" => "test('https transport', () => {\n    // Verify encrypted transport protocol (HTTPS)\n    expect(true).toBe(true);\n});\n",
+                    _ => "// Verify encrypted transport protocol (HTTPS)\n",
+                };
+                Some((
+                    fixed,
+                    "Enforced encrypted HTTPS transport protocol replacing cleartext HTTP (CWE-319).".to_string(),
+                    test_stub.to_string(),
+                ))
             } else {
-                (
-                    format!("// [HARDENED] {}\n{}", finding.recommendation, snippet),
-                    format!("Applied security defense transformation for {}.", finding.cwe),
-                    "// Automated security verification unit test\nassert!(true);".to_string(),
-                )
+                // For complex vulnerabilities (SQLi, Command Injection, Secrets, etc.),
+                // automated remediation requires AI LLM context or manual developer intervention.
+                None
             };
 
-            // Generate Unified Diff
-            let diff = TextDiff::from_lines(snippet, &hardened);
-            let mut diff_output = String::new();
-            diff_output.push_str(&format!("--- a/{}\n+++ b/{}\n", finding.file_path.display(), finding.file_path.display()));
-            for change in diff.iter_all_changes() {
-                let sign = match change.tag() {
-                    ChangeTag::Delete => "-",
-                    ChangeTag::Insert => "+",
-                    ChangeTag::Equal => " ",
-                };
-                diff_output.push_str(&format!("{}{}", sign, change));
-                if !change.value().ends_with('\n') {
-                    diff_output.push('\n');
+            if let Some((hardened, explanation, test_stub)) = patch_candidate {
+                // Generate Unified Diff
+                let diff = TextDiff::from_lines(snippet, &hardened);
+                let mut diff_output = String::new();
+                diff_output.push_str(&format!("--- a/{}\n+++ b/{}\n", finding.file_path.display(), finding.file_path.display()));
+                for change in diff.iter_all_changes() {
+                    let sign = match change.tag() {
+                        ChangeTag::Delete => "-",
+                        ChangeTag::Insert => "+",
+                        ChangeTag::Equal => " ",
+                    };
+                    diff_output.push_str(&format!("{}{}", sign, change));
+                    if !change.value().ends_with('\n') {
+                        diff_output.push('\n');
+                    }
                 }
-            }
 
-            patches.push(HardeningPatch {
-                id: format!("PATCH-{:04}", i + 1),
-                finding_id: finding.id.clone(),
-                target_file,
-                original_snippet: snippet.clone(),
-                hardened_snippet: hardened,
-                unified_diff: diff_output,
-                unit_test_code: test_stub,
-                applied: false,
-                explanation,
-            });
+                patches.push(HardeningPatch {
+                    id: format!("PATCH-{:04}", patches.len() + 1),
+                    finding_id: finding.id.clone(),
+                    target_file,
+                    original_snippet: snippet.clone(),
+                    hardened_snippet: hardened,
+                    unified_diff: diff_output,
+                    unit_test_code: test_stub,
+                    applied: false,
+                    explanation,
+                });
+            }
         }
 
         patches

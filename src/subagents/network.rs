@@ -76,10 +76,11 @@ impl NetworkProberAgent {
             if let Ok(content) = raw_content {
                 for (idx, line) in content.lines().enumerate() {
                     let trimmed = line.trim();
-                    // Ignore analyzer rule definitions and regex builders
+                    // Ignore analyzer rule definitions, string checks, and regex builders
                     if trimmed.starts_with("Regex::new")
                         || trimmed.starts_with("r#\"")
                         || trimmed.contains(".replace(")
+                        || trimmed.contains(".contains(\"")
                         || trimmed.starts_with("//")
                     {
                         continue;

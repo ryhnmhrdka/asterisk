@@ -23,67 +23,67 @@ pub struct StrategyPlanner;
 impl StrategyPlanner {
     pub fn create_plan(profile: &WorkspaceProfile) -> DefensePlan {
         let mut rules = vec![
-            "OWASP Top 10 (2025/2026 Edition) Pre-Build Enforcement".to_string(),
-            "CWE-798: No Hardcoded Cryptographic Keys or Tokens".to_string(),
-            "CWE-89/78: Strict Input Sanitization & Parameterization".to_string(),
-            "CWE-942: Zero-Trust Permissive CORS Prevention".to_string(),
-            "Pre-Deployment Automated Unit Test Verification Guarantee".to_string(),
+            "Capability Jail Confinement (cap-std filesystem boundaries)".to_string(),
+            "Pre-Execution Gate Evaluation (cedar-policy deny-by-default)".to_string(),
+            "Shannon Entropy Credential Mining (git2 commit history traversal)".to_string(),
+            "AST Code Context Reachability Analysis (Tflow = Sinput -> Dsink)".to_string(),
+            "Phantom Dependency Detection (SCA manifest cross-audit)".to_string(),
+            "Isolated Worktree Verification Sandbox (.sentinel/worktrees)".to_string(),
         ];
 
         if profile.has_docker {
-            rules.push("CIS Docker Benchmark: Rootless & Secure Base Policy".to_string());
-        }
-        if profile.has_mobile {
-            rules.push("OWASP Mobile Top 10: Insecure Storage & Communication Audit".to_string());
+            rules.push("Container Isolation Audit (Dockerfile configuration check)".to_string());
         }
 
-        let phases = vec![
+        let mut phases = vec![
             PlanPhase {
                 id: "phase_recon".to_string(),
-                title: "1. Target Recon & Surface Mapping".to_string(),
-                subagent_role: "Orchestrator General Agent".to_string(),
-                goal: "Analyze folder layout, language stacks, and configure active subagents.".to_string(),
+                title: "1. Workspace Surface Reconnaissance".to_string(),
+                subagent_role: "Orchestrator Core".to_string(),
+                goal: "Map repository filesystem structure and detect active language toolchains.".to_string(),
             },
             PlanPhase {
                 id: "phase_secrets".to_string(),
-                title: "2. Secret & Credential Hunter".to_string(),
-                subagent_role: "SecretHunter SubAgent".to_string(),
-                goal: "Scan files and environment templates for leaked keys, JWTs, and high-entropy credentials.".to_string(),
+                title: "2. Cryptographic Secret & Entropy Audit".to_string(),
+                subagent_role: "Secret Hunter".to_string(),
+                goal: "Scan source files and Git commit log history for exposed API keys and high-entropy tokens.".to_string(),
             },
             PlanPhase {
                 id: "phase_sast".to_string(),
-                title: "3. SAST Vulnerability Deep Scan".to_string(),
-                subagent_role: "SastAnalyzer SubAgent".to_string(),
-                goal: "Inspect AST/regex code paths for Command Injection, SQLi, and Path Traversal.".to_string(),
+                title: "3. Static Vulnerability & Reachability Analysis".to_string(),
+                subagent_role: "SAST & Graph Engine".to_string(),
+                goal: "Traverse AST nodes and call graph to trace untrusted user input to sensitive sinks.".to_string(),
             },
             PlanPhase {
-                id: "phase_net".to_string(),
-                title: "4. Network & Exposure Audit".to_string(),
-                subagent_role: "NetworkProber SubAgent".to_string(),
-                goal: "Detect dangerous 0.0.0.0 binds, CORS wildcards, and unencrypted transports.".to_string(),
-            },
-            PlanPhase {
-                id: "phase_patch".to_string(),
-                title: "5. Auto-Hardening Patch Generation".to_string(),
-                subagent_role: "AutoHardening SubAgent".to_string(),
-                goal: "Synthesize immediate unified diff code patches for identified security vulnerabilities.".to_string(),
+                id: "phase_sca".to_string(),
+                title: "4. Supply-Chain & Dependency Audit".to_string(),
+                subagent_role: "SCA Dependency Auditor".to_string(),
+                goal: "Cross-reference imported modules with manifests to prevent phantom dependency attacks.".to_string(),
             },
             PlanPhase {
                 id: "phase_verify".to_string(),
-                title: "6. Unit Test Synthesizer & Verification".to_string(),
-                subagent_role: "Verification SubAgent".to_string(),
-                goal: "Synthesize unit test cases ensuring defense patches withstand exploits without regressions.".to_string(),
+                title: "5. Pre-Production Defense Gate Evaluation".to_string(),
+                subagent_role: "Policy Gate".to_string(),
+                goal: "Evaluate Cedar security policy in worktree sandbox prior to release authorization.".to_string(),
             },
         ];
+
+        if profile.has_docker {
+            phases.push(PlanPhase {
+                id: "phase_container".to_string(),
+                title: "6. Container Base Image Verification".to_string(),
+                subagent_role: "Container Auditor".to_string(),
+                goal: "Verify Dockerfile directives and non-root execution posture.".to_string(),
+            });
+        }
 
         DefensePlan {
             strategy_name: "Autonomous Pre-Production Defense Matrix".to_string(),
             target_summary: format!(
-                "Scanned {} files across [{}] (Docker: {}, Mobile: {})",
+                "Target: {} file(s) across [{}] (Docker: {})",
                 profile.total_files,
                 profile.languages.join(", "),
-                profile.has_docker,
-                profile.has_mobile
+                profile.has_docker
             ),
             rules_applied: rules,
             phases,

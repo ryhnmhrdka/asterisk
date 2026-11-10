@@ -24,7 +24,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use crate::core::{PolicyGate, SecurityAgentHub};
+use crate::core::{AppConfig, PolicyGate, SecurityAgentHub};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppMode {
@@ -67,6 +67,7 @@ pub struct App {
     pub is_running: bool,
     pub awaiting_confirmation: bool,
     pub active_provider: AiProvider,
+    pub config: AppConfig,
     pub expanded_messages: HashSet<usize>,
 
     pub engine_rx: UnboundedReceiver<EngineMessage>,
@@ -86,6 +87,8 @@ impl App {
         let nodes_info = AgentGraphBuilder::build_nodes_for_workspace(&initial_target);
         let flow = AgentGraphBuilder::build_sprouted_graph(&nodes_info).unwrap_or_else(|_| Flow::new());
         let skills = SkillRegistry::new();
+        let config = AppConfig::load();
+        let active_provider = config.provider;
 
         Self {
             mode: if start_in_welcome { AppMode::Welcome } else { AppMode::Workspace },
@@ -109,7 +112,8 @@ impl App {
             action_msg: None,
             is_running: false,
             awaiting_confirmation: false,
-            active_provider: AiProvider::OllamaLocal,
+            active_provider,
+            config,
             expanded_messages: HashSet::new(),
             engine_rx: rx,
             engine_tx: tx,
@@ -273,6 +277,8 @@ impl App {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => true,
             KeyCode::Tab => {
                 self.active_provider = self.active_provider.next();
+                self.config.provider = self.active_provider;
+                let _ = self.config.save();
                 false
             }
             KeyCode::Enter => {
@@ -282,7 +288,7 @@ impl App {
                         self.target_dir = PathBuf::from(&input);
                     } else {
                         self.chat_messages.push(ChatMessage::User(input.clone()));
-                        let hub = SecurityAgentHub::new(self.target_dir.clone(), Arc::new(PolicyGate::default()), self.active_provider);
+                        let hub = SecurityAgentHub::new(self.target_dir.clone(), Arc::new(PolicyGate::default()), self.config.clone());
                         let sender = self.engine_tx.clone();
                         tokio::spawn(async move {
                             let reply = hub.query(&input).await;
@@ -413,29 +419,92 @@ impl App {
                 self.trigger_audit();
             } else if input == "/provider" {
                 self.active_provider = self.active_provider.next();
+                self.config.provider = self.active_provider;
+                let _ = self.config.save();
                 self.chat_messages.push(ChatMessage::Agent {
                     sender: "orchestrator".to_string(),
-                    text: format!("Switched active AI provider to **{}**.", self.active_provider.name()),
+                    text: format!(
+                        "Switched active AI provider to **{}**.\n- Model: `{}`\n- Endpoint: `{}`",
+                        self.active_provider.name(),
+                        self.config.get_model(),
+                        self.config.get_base_url().unwrap_or_else(|| "provider default".to_string())
+                    ),
                 });
             } else if let Some(prov_str) = input.strip_prefix("/provider ") {
                 let lower = prov_str.trim().to_lowercase();
-                if lower.contains("ollama") {
-                    self.active_provider = AiProvider::OllamaLocal;
-                } else if lower.contains("claude") {
+                if lower.contains("custom") {
+                    self.active_provider = AiProvider::Custom;
+                } else if lower.contains("claude") || lower.contains("anthropic") {
                     self.active_provider = AiProvider::AnthropicClaude;
                 } else if lower.contains("gpt") || lower.contains("openai") {
                     self.active_provider = AiProvider::OpenAiGpt4o;
-                } else if lower.contains("gemini") {
+                } else if lower.contains("gemini") || lower.contains("google") {
                     self.active_provider = AiProvider::GoogleGemini;
                 } else if lower.contains("deepseek") {
                     self.active_provider = AiProvider::DeepSeek;
+                } else if lower.contains("ollama") {
+                    self.active_provider = AiProvider::OllamaLocal;
                 }
+                self.config.provider = self.active_provider;
+                let _ = self.config.save();
                 self.chat_messages.push(ChatMessage::Agent {
                     sender: "orchestrator".to_string(),
-                    text: format!("Configured active AI provider to **{}**.", self.active_provider.name()),
+                    text: format!(
+                        "Configured active AI provider to **{}**.\n- Model: `{}`\n- Endpoint: `{}`\n- API Key: `{}`",
+                        self.active_provider.name(),
+                        self.config.get_model(),
+                        self.config.get_base_url().unwrap_or_else(|| "provider default".to_string()),
+                        self.config.mask_key()
+                    ),
+                });
+            } else if let Some(key_str) = input.strip_prefix("/key ") {
+                let key = key_str.trim().to_string();
+                self.config.api_key = Some(key);
+                let _ = self.config.save();
+                self.chat_messages.push(ChatMessage::Agent {
+                    sender: "orchestrator".to_string(),
+                    text: format!(
+                        "✓ Successfully saved API key for **{}**: `{}` (stored in `~/.config/constellation/config.json`).",
+                        self.active_provider.name(),
+                        self.config.mask_key()
+                    ),
+                });
+            } else if let Some(url_str) = input.strip_prefix("/url ") {
+                let url = url_str.trim().to_string();
+                self.config.base_url = Some(url.clone());
+                let _ = self.config.save();
+                self.chat_messages.push(ChatMessage::Agent {
+                    sender: "orchestrator".to_string(),
+                    text: format!(
+                        "✓ Successfully configured API endpoint base URL to: `{}`.",
+                        url
+                    ),
+                });
+            } else if let Some(model_str) = input.strip_prefix("/model ") {
+                let model = model_str.trim().to_string();
+                self.config.model = Some(model.clone());
+                let _ = self.config.save();
+                self.chat_messages.push(ChatMessage::Agent {
+                    sender: "orchestrator".to_string(),
+                    text: format!(
+                        "✓ Successfully configured model to: `{}` for provider **{}**.",
+                        model,
+                        self.active_provider.name()
+                    ),
+                });
+            } else if input == "/config" || input == "/status" {
+                self.chat_messages.push(ChatMessage::Agent {
+                    sender: "orchestrator".to_string(),
+                    text: format!(
+                        "### Production AI Provider Configuration\n- **Provider**: {}\n- **Target Model**: `{}`\n- **Endpoint URL**: `{}`\n- **API Key**: `{}`\n\n*Commands:*\n- `/provider <custom|openai|claude|gemini|deepseek|ollama>`\n- `/key <api_key>`\n- `/url <base_url>`\n- `/model <model_name>`",
+                        self.active_provider.name(),
+                        self.config.get_model(),
+                        self.config.get_base_url().unwrap_or_else(|| "default".to_string()),
+                        self.config.mask_key()
+                    ),
                 });
             } else {
-                let hub = SecurityAgentHub::new(self.target_dir.clone(), Arc::new(PolicyGate::default()), self.active_provider);
+                let hub = SecurityAgentHub::new(self.target_dir.clone(), Arc::new(PolicyGate::default()), self.config.clone());
                 let sender = self.engine_tx.clone();
                 let prompt_text = input.clone();
                 tokio::spawn(async move {
@@ -523,7 +592,7 @@ impl App {
                                 self.target_dir = PathBuf::from(&input);
                             } else {
                                 self.chat_messages.push(ChatMessage::User(input.clone()));
-                                let hub = SecurityAgentHub::new(self.target_dir.clone(), Arc::new(PolicyGate::default()), self.active_provider);
+                                let hub = SecurityAgentHub::new(self.target_dir.clone(), Arc::new(PolicyGate::default()), self.config.clone());
                                 let sender = self.engine_tx.clone();
                                 tokio::spawn(async move {
                                     let reply = hub.query(&input).await;

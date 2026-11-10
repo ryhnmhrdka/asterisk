@@ -97,31 +97,54 @@ pub struct WorkspaceProfile {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AiProvider {
-    OllamaLocal,
     AnthropicClaude,
     OpenAiGpt4o,
     GoogleGemini,
     DeepSeek,
+    Custom,
+    OllamaLocal,
 }
 
 impl AiProvider {
     pub fn name(&self) -> &'static str {
         match self {
-            AiProvider::OllamaLocal => "Ollama (Local Offline)",
-            AiProvider::AnthropicClaude => "Anthropic Claude 3.7",
-            AiProvider::OpenAiGpt4o => "OpenAI GPT-4o",
-            AiProvider::GoogleGemini => "Google Gemini 2.0",
-            AiProvider::DeepSeek => "DeepSeek R1/V3",
+            AiProvider::AnthropicClaude => "Anthropic Claude",
+            AiProvider::OpenAiGpt4o => "OpenAI",
+            AiProvider::GoogleGemini => "Google Gemini",
+            AiProvider::DeepSeek => "DeepSeek",
+            AiProvider::Custom => "Custom Provider",
+            AiProvider::OllamaLocal => "Ollama Local",
         }
     }
 
     pub fn next(&self) -> Self {
         match self {
-            AiProvider::OllamaLocal => AiProvider::AnthropicClaude,
             AiProvider::AnthropicClaude => AiProvider::OpenAiGpt4o,
             AiProvider::OpenAiGpt4o => AiProvider::GoogleGemini,
             AiProvider::GoogleGemini => AiProvider::DeepSeek,
-            AiProvider::DeepSeek => AiProvider::OllamaLocal,
+            AiProvider::DeepSeek => AiProvider::Custom,
+            AiProvider::Custom => AiProvider::OllamaLocal,
+            AiProvider::OllamaLocal => AiProvider::AnthropicClaude,
+        }
+    }
+
+    pub fn default_model(&self) -> &'static str {
+        match self {
+            AiProvider::AnthropicClaude => "claude-3-7-sonnet-20250219",
+            AiProvider::OpenAiGpt4o => "gpt-4o",
+            AiProvider::GoogleGemini => "gemini-2.0-flash",
+            AiProvider::DeepSeek => "deepseek-chat",
+            AiProvider::Custom => "gpt-4o",
+            AiProvider::OllamaLocal => "llama3.2",
+        }
+    }
+
+    pub fn default_base_url(&self) -> Option<&'static str> {
+        match self {
+            AiProvider::DeepSeek => Some("https://api.deepseek.com/v1"),
+            AiProvider::Custom => Some("http://localhost:8000/v1"),
+            AiProvider::OllamaLocal => Some("http://localhost:11434"),
+            _ => None,
         }
     }
 }

@@ -65,51 +65,65 @@ impl ScaDependencyAuditor {
 }
 
 fn audit_cargo_dependencies(content: &str, findings: &mut Vec<VulnerabilityFinding>) {
-    // Known vulnerable crate versions checks
+    // Known vulnerable crate versions (exact version match)
     let known_vulnerabilities = [
         ("openssl", "0.10.30", "RUSTSEC-2022-0040", Severity::High),
         ("tokio", "0.2.20", "RUSTSEC-2020-0010", Severity::Medium),
     ];
 
-    for line in content.lines() {
-        for (pkg, ver, advisory, sev) in &known_vulnerabilities {
-            if line.contains(&format!("name = \"{pkg}\"")) {
-                findings.push(VulnerabilityFinding {
-                    id: format!("SCA-RUST-{:04}", findings.len() + 1),
-                    title: format!("Vulnerable Supply-Chain Dependency: {pkg} ({advisory})"),
-                    cwe: "CWE-1395".to_string(),
-                    severity: *sev,
-                    file_path: PathBuf::from("Cargo.lock"),
-                    line_number: 1,
-                    snippet: format!("package: {pkg} v{ver}"),
-                    description: format!("Third-party package '{pkg}' contains known security advisory {advisory}."),
-                    recommendation: format!("Upgrade {pkg} to latest secure release."),
-                    patched: false,
-                });
+    // Parse TOML package blocks accurately
+    let mut current_pkg: Option<String> = None;
+    for (line_idx, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("name = ") {
+            let name = trimmed.trim_start_matches("name = ").trim_matches('"');
+            current_pkg = Some(name.to_string());
+        } else if trimmed.starts_with("version = ") {
+            let ver = trimmed.trim_start_matches("version = ").trim_matches('"');
+            if let Some(pkg) = &current_pkg {
+                for (target_pkg, target_ver, advisory, sev) in &known_vulnerabilities {
+                    if pkg == target_pkg && ver == *target_ver {
+                        findings.push(VulnerabilityFinding {
+                            id: format!("SCA-RUST-{:04}", findings.len() + 1),
+                            title: format!("Vulnerable Supply-Chain Dependency: {pkg} v{ver} ({advisory})"),
+                            cwe: "CWE-1395".to_string(),
+                            severity: *sev,
+                            file_path: PathBuf::from("Cargo.lock"),
+                            line_number: line_idx + 1,
+                            snippet: format!("name = \"{pkg}\"\nversion = \"{ver}\""),
+                            description: format!("Third-party package '{pkg}' v{ver} contains known security advisory {advisory}."),
+                            recommendation: format!("Upgrade {pkg} to latest secure release."),
+                            patched: false,
+                        });
+                    }
+                }
             }
+        } else if trimmed == "[[package]]" {
+            current_pkg = None;
         }
     }
 }
 
 fn audit_node_dependencies(content: &str, findings: &mut Vec<VulnerabilityFinding>) {
-    let risky_packages = [
-        ("lodash", "CWE-471 Prototype Pollution"),
-        ("axios", "CWE-918 Server-Side Request Forgery"),
-        ("express", "CWE-1385 Improper Middleware Routing"),
+    // Known vulnerable npm package versions
+    let known_node_vulns = [
+        ("lodash", "4.17.20", "CVE-2021-23337: Prototype Pollution"),
+        ("axios", "0.21.0", "CVE-2020-28168: SSRF Vulnerability"),
     ];
 
-    for (pkg, desc) in risky_packages {
-        if content.contains(&format!("\"{pkg}\"")) {
+    for (pkg, ver, advisory) in known_node_vulns {
+        let pattern = format!("\"{pkg}\": \"{ver}\"");
+        if content.contains(&pattern) {
             findings.push(VulnerabilityFinding {
                 id: format!("SCA-NODE-{:04}", findings.len() + 1),
-                title: format!("Supply-Chain Dependency Audit: {pkg}"),
+                title: format!("Vulnerable Supply-Chain Package: {pkg} v{ver}"),
                 cwe: "CWE-1395".to_string(),
-                severity: Severity::Medium,
+                severity: Severity::High,
                 file_path: PathBuf::from("package.json"),
                 line_number: 1,
-                snippet: format!("dependency: \"{pkg}\""),
-                description: format!("Dependency '{pkg}' monitored: {desc}."),
-                recommendation: format!("Verify reachability of '{pkg}' call sites before deployment."),
+                snippet: pattern,
+                description: format!("NPM package '{pkg}' v{ver} is affected by {advisory}."),
+                recommendation: format!("Upgrade '{pkg}' to a patched version in package.json."),
                 patched: false,
             });
         }

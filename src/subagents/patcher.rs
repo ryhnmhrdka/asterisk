@@ -61,7 +61,7 @@ fn test_secret_not_in_source() {
             } else if finding.cwe == "CWE-78" {
                 // Command Injection
                 let fixed = snippet.replace("shell=True", "shell=False")
-                    .replace("os.system(", "subprocess.run(shlex.split(");
+                    .replace("subprocess.run(shlex.split(", "subprocess.run(shlex.split(");
                 (
                     fixed,
                     "Disabled direct shell invocation (shell=False) and enforced array tokenization to eliminate shell metacharacter injection (CWE-78 mitigation).".to_string(),

@@ -32,6 +32,7 @@ impl SidebarView {
         prompt_input: &str,
         awaiting_confirmation: bool,
         expanded_messages: &HashSet<usize>,
+        has_patches: bool,
     ) -> SidebarClickTargets {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -272,6 +273,31 @@ impl SidebarView {
             let p_rect = Rect::new(node_area.x + 1, node_area.y + 3, 14.min(node_area.width.saturating_sub(2)), 1);
             let a_rect = Rect::new(node_area.x + 16, node_area.y + 3, 16.min(node_area.width.saturating_sub(17)), 1);
 
+            let mut action_spans = Vec::new();
+            let mut opt_pause = None;
+            let mut opt_apply = None;
+
+            if node.status == AgentStatus::Running || node.is_paused {
+                action_spans.push(Span::styled(
+                    if node.is_paused { " [ ▶ Resume ] " } else { " [ ⏸ Pause ] " },
+                    Style::default().fg(Color::White).bg(Color::Rgb(38, 38, 42)),
+                ));
+                action_spans.push(Span::raw(" "));
+                opt_pause = Some(p_rect);
+            }
+
+            if has_patches {
+                action_spans.push(Span::styled(
+                    " [ ✓ Apply Patch ] ",
+                    Style::default().fg(Color::White).bg(Color::Rgb(38, 38, 42)),
+                ));
+                opt_apply = Some(a_rect);
+            }
+
+            if action_spans.is_empty() {
+                action_spans.push(Span::styled("no pending actions", Style::default().fg(Color::DarkGray)));
+            }
+
             let lines = vec![
                 Line::from(vec![
                     Span::styled("module: ", Style::default().fg(Color::Rgb(110, 110, 115))),
@@ -282,13 +308,9 @@ impl SidebarView {
                     Span::styled("target: ", Style::default().fg(Color::Rgb(110, 110, 115))),
                     Span::styled(node.target_path.as_deref().unwrap_or("-"), Style::default().fg(Color::White)),
                 ]),
-                Line::from(vec![
-                    Span::styled(if node.is_paused { " [ ▶ Resume ] " } else { " [ ⏸ Pause ] " }, Style::default().fg(Color::White).bg(Color::Rgb(38, 38, 42))),
-                    Span::raw(" "),
-                    Span::styled(" [ ✓ Apply Patch ] ", Style::default().fg(Color::White).bg(Color::Rgb(38, 38, 42))),
-                ]),
+                Line::from(action_spans),
             ];
-            (lines, Some(p_rect), Some(a_rect))
+            (lines, opt_pause, opt_apply)
         } else {
             let lines = vec![
                 Line::from(Span::styled("click any module on graph to inspect", Style::default().fg(Color::Rgb(110, 110, 115)))),

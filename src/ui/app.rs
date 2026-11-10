@@ -7,7 +7,7 @@ use crate::types::{
     VulnerabilityFinding, WorkspaceProfile,
 };
 use crate::ui::views::{
-    GraphView, LogsView, MatrixView, PatchClickTargets, PatchView, SidebarClickTargets,
+    GraphView, LogsView, MatrixView, ModalView, PatchClickTargets, PatchView, SidebarClickTargets,
     SidebarView, SkillsView, WelcomeView,
 };
 use chrono::Utc;
@@ -69,6 +69,9 @@ pub struct App {
     pub active_provider: AiProvider,
     pub config: AppConfig,
     pub expanded_messages: HashSet<usize>,
+    pub show_key_modal: bool,
+    pub key_modal_input: String,
+    pub key_modal_error: Option<String>,
 
     pub engine_rx: UnboundedReceiver<EngineMessage>,
     pub engine_tx: UnboundedSender<EngineMessage>,
@@ -115,6 +118,9 @@ impl App {
             active_provider,
             config,
             expanded_messages: HashSet::new(),
+            show_key_modal: false,
+            key_modal_input: String::new(),
+            key_modal_error: None,
             engine_rx: rx,
             engine_tx: tx,
             cmd_tx,
@@ -127,6 +133,13 @@ impl App {
         if self.is_running {
             return;
         }
+
+        if !self.config.is_api_key_configured() {
+            self.show_key_modal = true;
+            self.action_msg = Some("API key required to execute defense workflow.".to_string());
+            return;
+        }
+
         self.is_running = true;
         self.awaiting_confirmation = false;
         self.action_msg = Some("scanning workspace...".to_string());
@@ -265,9 +278,59 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            return true;
+        }
+
+        if self.show_key_modal {
+            return self.handle_modal_key(key);
+        }
+
         match self.mode {
             AppMode::Welcome => self.handle_welcome_key(key),
             AppMode::Workspace => self.handle_workspace_key(key),
+        }
+    }
+
+    fn handle_modal_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                self.show_key_modal = false;
+                self.key_modal_error = None;
+                false
+            }
+            KeyCode::Tab => {
+                self.active_provider = self.active_provider.next();
+                self.config.provider = self.active_provider;
+                let _ = self.config.save();
+                false
+            }
+            KeyCode::Enter => {
+                let trimmed = self.key_modal_input.trim().to_string();
+                if trimmed.is_empty() {
+                    self.key_modal_error = Some("API key cannot be empty.".to_string());
+                } else {
+                    self.config.api_key = Some(trimmed);
+                    let _ = self.config.save();
+                    self.show_key_modal = false;
+                    self.key_modal_error = None;
+                    self.chat_messages.push(ChatMessage::System(format!(
+                        "✓ Authenticated {} with configured API key.",
+                        self.active_provider.name()
+                    )));
+                    self.action_msg = Some("authenticated.".to_string());
+                }
+                false
+            }
+            KeyCode::Backspace => {
+                self.key_modal_input.pop();
+                false
+            }
+            KeyCode::Char(c) => {
+                self.key_modal_input.push(c);
+                false
+            }
+            _ => false,
         }
     }
 
@@ -282,6 +345,12 @@ impl App {
                 false
             }
             KeyCode::Enter => {
+                if !self.config.is_api_key_configured() {
+                    self.show_key_modal = true;
+                    self.action_msg = Some("authentication required: please set API key to proceed.".to_string());
+                    return false;
+                }
+
                 let input = self.welcome_input.trim().to_string();
                 if !input.is_empty() {
                     if std::path::Path::new(&input).exists() {
@@ -347,19 +416,30 @@ impl App {
                 self.prompt_input.pop();
             }
             KeyCode::Char('p') if self.prompt_input.is_empty() => {
-                self.toggle_pause_selected_node();
+                if self.is_running {
+                    self.toggle_pause_selected_node();
+                }
             }
             KeyCode::Char('a') if self.prompt_input.is_empty() => {
-                self.apply_current_patch();
+                if !self.patches.is_empty() {
+                    self.apply_current_patch();
+                }
             }
             KeyCode::Char('r') if self.prompt_input.is_empty() => {
-                self.rollback_current_patch();
+                if !self.patches.is_empty() {
+                    self.rollback_current_patch();
+                }
             }
             KeyCode::Char('e') if self.prompt_input.is_empty() => {
                 self.export_security_report();
             }
             KeyCode::Char(' ') if self.prompt_input.is_empty() => {
-                self.trigger_audit();
+                if !self.config.is_api_key_configured() {
+                    self.show_key_modal = true;
+                    self.action_msg = Some("authentication required: please set API key to run audit.".to_string());
+                } else {
+                    self.trigger_audit();
+                }
             }
             KeyCode::Up => {
                 if self.current_tab == 1 && self.selected_matrix_row > 0 {
@@ -457,6 +537,9 @@ impl App {
                         self.config.mask_key()
                     ),
                 });
+            } else if input == "/key" {
+                self.show_key_modal = true;
+                self.action_msg = Some("enter API key in modal dialog.".to_string());
             } else if let Some(key_str) = input.strip_prefix("/key ") {
                 let key = key_str.trim().to_string();
                 self.config.api_key = Some(key);
@@ -504,6 +587,11 @@ impl App {
                     ),
                 });
             } else {
+                if !self.config.is_api_key_configured() {
+                    self.show_key_modal = true;
+                    self.action_msg = Some("authentication required: please set API key.".to_string());
+                    return;
+                }
                 let hub = SecurityAgentHub::new(self.target_dir.clone(), Arc::new(PolicyGate::default()), self.config.clone());
                 let sender = self.engine_tx.clone();
                 let prompt_text = input.clone();
@@ -563,6 +651,10 @@ impl App {
     }
 
     pub fn handle_mouse(&mut self, mouse: MouseEvent) {
+        if self.show_key_modal {
+            return;
+        }
+
         let col = mouse.column;
         let row = mouse.row;
         let is_left_click = matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left));
@@ -586,6 +678,12 @@ impl App {
             if is_left_click {
                 if let Some(btn) = self.click_targets.welcome_btn {
                     if in_rect(btn, col, row) {
+                        if !self.config.is_api_key_configured() {
+                            self.show_key_modal = true;
+                            self.action_msg = Some("authentication required: please set API key.".to_string());
+                            return;
+                        }
+
                         let input = self.welcome_input.trim().to_string();
                         if !input.is_empty() {
                             if std::path::Path::new(&input).exists() {
@@ -749,6 +847,16 @@ impl App {
                 self.render_workspace(f, area);
             }
         }
+
+        if self.show_key_modal {
+            ModalView::render_key_modal(
+                f,
+                area,
+                self.active_provider,
+                &self.key_modal_input,
+                self.key_modal_error.as_deref(),
+            );
+        }
     }
 
     fn render_workspace(&mut self, f: &mut Frame, area: Rect) {
@@ -809,6 +917,7 @@ impl App {
             &self.prompt_input,
             self.awaiting_confirmation,
             &self.expanded_messages,
+            !self.patches.is_empty(),
         );
         self.click_targets.sidebar = Some(sidebar_targets);
 
@@ -864,19 +973,29 @@ impl App {
         }
 
         // Bottom Footer Bar
-        let footer = Line::from(vec![
-            Span::styled("click anywhere to interact  │  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("tab", Style::default().fg(Color::White)),
-            Span::styled(" views  │  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("p", Style::default().fg(Color::White)),
-            Span::styled(" pause/resume  │  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("a", Style::default().fg(Color::White)),
-            Span::styled(" apply  │  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("r", Style::default().fg(Color::White)),
-            Span::styled(" rollback  │  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("esc", Style::default().fg(Color::White)),
-            Span::styled(" quit", Style::default().fg(Color::DarkGray)),
-        ]);
+        let footer = if self.patches.is_empty() {
+            Line::from(vec![
+                Span::styled("space", Style::default().fg(Color::White)),
+                Span::styled(" audit  │  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("tab", Style::default().fg(Color::White)),
+                Span::styled(" views  │  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("/config", Style::default().fg(Color::White)),
+                Span::styled(" settings  │  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("esc", Style::default().fg(Color::White)),
+                Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled("tab", Style::default().fg(Color::White)),
+                Span::styled(" views  │  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("a", Style::default().fg(Color::White)),
+                Span::styled(" apply patch  │  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("r", Style::default().fg(Color::White)),
+                Span::styled(" rollback  │  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("esc", Style::default().fg(Color::White)),
+                Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+            ])
+        };
         f.render_widget(Paragraph::new(footer), root_chunks[2]);
     }
 }

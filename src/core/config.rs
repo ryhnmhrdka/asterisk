@@ -134,6 +134,17 @@ impl AppConfig {
         self.provider.default_base_url().map(|s| s.to_string())
     }
 
+    pub fn requires_api_key(&self) -> bool {
+        self.provider != AiProvider::OllamaLocal
+    }
+
+    pub fn is_api_key_configured(&self) -> bool {
+        if !self.requires_api_key() {
+            return true;
+        }
+        self.get_api_key().is_some()
+    }
+
     pub fn mask_key(&self) -> String {
         match self.get_api_key() {
             Some(k) if k.len() > 8 => {

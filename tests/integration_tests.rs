@@ -71,3 +71,38 @@ fn test_harness_full_pipeline() {
         }
     }
 }
+
+#[test]
+fn test_app_empty_state_and_auth_modal_gate() {
+    use constellation::ui::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    // App must start with 0 findings, 0 patches, empty plan (no dummy data)
+    let mut app = App::new(PathBuf::from("."), true);
+    assert_eq!(app.findings.len(), 0);
+    assert_eq!(app.patches.len(), 0);
+    assert!(app.plan.is_none());
+    assert!(!app.is_running);
+    assert!(!app.show_key_modal);
+
+    // If API key is not configured, trigger_audit must block and display the auth modal
+    app.config.api_key = None;
+    app.config.provider = constellation::types::AiProvider::AnthropicClaude;
+
+    // Triggering audit without key
+    app.trigger_audit();
+    assert!(!app.is_running, "Audit must NOT run without configured API key");
+    assert!(app.show_key_modal, "Auth modal must pop up when API key is missing");
+
+    // Typing into modal and authenticating
+    app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::empty()));
+    app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::empty()));
+    app.handle_key(KeyEvent::new(KeyCode::Char('-'), KeyModifiers::empty()));
+    app.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::empty()));
+    assert_eq!(app.key_modal_input, "sk-1");
+
+    // Press Enter to save & authenticate
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert!(!app.show_key_modal, "Modal must close upon valid key submission");
+    assert_eq!(app.config.get_api_key().as_deref(), Some("sk-1"));
+}

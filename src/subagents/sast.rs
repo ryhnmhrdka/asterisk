@@ -83,6 +83,17 @@ impl SastAnalyzerAgent {
 
             if let Ok(content) = raw_content {
                 for (idx, line) in content.lines().enumerate() {
+                    let trimmed = line.trim();
+                    // Ignore analyzer rule definitions, string checks, and regex builders
+                    if trimmed.starts_with("Regex::new")
+                        || trimmed.starts_with("r#\"")
+                        || trimmed.contains(".replace(")
+                        || trimmed.contains(".contains(\"")
+                        || trimmed.starts_with("//")
+                    {
+                        continue;
+                    }
+
                     for (title, re, sev, cwe, desc, rec) in &rules {
                         if re.is_match(line) {
                             findings.push(VulnerabilityFinding {

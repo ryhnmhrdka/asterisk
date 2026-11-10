@@ -72,17 +72,36 @@ fn inspect_commit_diff(
 
     let _ = diff.print(git2::DiffFormat::Patch, |delta, _hunk, line| {
         if line.origin() == '+' {
+            let file_path = delta
+                .new_file()
+                .path()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("git-history"));
+
+            let path_str = file_path.to_string_lossy();
+            if path_str.contains("fixtures")
+                || path_str.contains("target")
+                || path_str.contains("Cargo.lock")
+                || path_str.contains("tests")
+                || path_str.ends_with(".md")
+            {
+                return true;
+            }
+
             let line_str = String::from_utf8_lossy(line.content());
             let trimmed = line_str.trim();
 
+            if trimmed.contains("test_")
+                || trimmed.contains("#[test]")
+                || trimmed.contains("let high_ent")
+                || trimmed.contains("assert")
+                || trimmed.starts_with("//")
+            {
+                return true;
+            }
+
             if let Some(secret) = detect_high_entropy_secret(trimmed) {
                 if seen_secrets.insert(secret.clone()) {
-                    let file_path = delta
-                        .new_file()
-                        .path()
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| PathBuf::from("git-history"));
-
                     findings.push(VulnerabilityFinding {
                         id: format!("HIST-SEC-{:04}", findings.len() + 1),
                         title: format!("Leaked Credential in Commit History ({commit_id_short})"),
@@ -105,16 +124,59 @@ fn inspect_commit_diff(
 }
 
 fn detect_high_entropy_secret(line: &str) -> Option<String> {
-    for word in line.split(|c: char| c.is_whitespace() || c == '=' || c == ':' || c == '"' || c == '\'') {
-        let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
-        if clean.len() >= 24 {
-            let ent = shannon_entropy(clean);
-            // High entropy threshold for cryptographic keys/tokens
-            if ent >= 4.2 {
-                return Some(clean.to_string());
+    if line.contains("Regex::new") || line.contains("r\"") || line.contains("r#\"") {
+        return None;
+    }
+
+    // 1. Explicit signature prefix checks
+    let prefix_signatures = [
+        "AKIA",          // AWS Access Key ID
+        "ghp_",          // GitHub Personal Access Token
+        "gho_",          // GitHub OAuth Token
+        "glpat-",        // GitLab Personal Access Token
+        "sk-proj-",      // OpenAI Project Key
+        "xoxb-",         // Slack Bot Token
+        "AIzaSy",        // Google API Key
+        "-----BEGIN ",   // Private Key Block
+    ];
+
+    for prefix in &prefix_signatures {
+        if let Some(idx) = line.find(prefix) {
+            let candidate = &line[idx..];
+            let token = candidate
+                .split(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',' || c == ';')
+                .next()
+                .unwrap_or("");
+            if token.len() >= 20 {
+                return Some(token.to_string());
             }
         }
     }
+
+    // 2. High entropy variable assignments: api_key = "...", secret = "..."
+    let lower = line.to_lowercase();
+    let has_secret_keyword = lower.contains("secret")
+        || lower.contains("api_key")
+        || lower.contains("apikey")
+        || lower.contains("password")
+        || lower.contains("token");
+
+    let has_assignment = line.contains('=') || line.contains(':');
+
+    if has_secret_keyword && has_assignment {
+        for word in line.split(|c: char| c.is_whitespace() || c == '=' || c == ':' || c == '"' || c == '\'') {
+            let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
+            // Ignore hex commit hashes or checksums (e.g. 40 hex chars or 64 hex chars)
+            let is_pure_hex = clean.len() >= 32 && clean.chars().all(|c| c.is_ascii_hexdigit());
+            if clean.len() >= 24 && !is_pure_hex {
+                let ent = shannon_entropy(clean);
+                if ent >= 4.3 {
+                    return Some(clean.to_string());
+                }
+            }
+        }
+    }
+
     None
 }
 

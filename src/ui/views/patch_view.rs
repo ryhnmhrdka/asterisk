@@ -88,42 +88,55 @@ impl PatchView {
 
         // Top Action Bar with Clickable Buttons
         let action_bar_area = right_chunks[0];
-        let action_split = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(24),
-                Constraint::Length(16),
-                Constraint::Min(10),
-            ])
-            .split(action_bar_area);
+        let mut btn_apply = None;
+        let mut btn_rollback = None;
 
-        let apply_rect = action_split[0];
-        let rollback_rect = action_split[1];
-        let msg_rect = action_split[2];
-
-        let apply_block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::White));
-        let apply_text = Line::from(Span::styled(" [ ✓ Apply Patch to Disk ] ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)));
-        f.render_widget(Paragraph::new(apply_text).centered().block(apply_block), apply_rect);
-
-        let roll_block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
-        let roll_text = Line::from(Span::styled(" [ ↩ Rollback ] ", Style::default().fg(Color::Gray)));
-        f.render_widget(Paragraph::new(roll_text).centered().block(roll_block), rollback_rect);
-
-        let status_text = if let Some(msg) = action_msg {
-            Line::from(vec![
-                Span::styled("status: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(msg, Style::default().fg(Color::White)),
-            ])
+        if patches.is_empty() {
+            let empty_text = Line::from(vec![
+                Span::styled("no hardening patches pending  │  codebase is clean or no patches synthesized", Style::default().fg(Color::DarkGray)),
+            ]);
+            f.render_widget(Paragraph::new(empty_text), action_bar_area);
         } else {
-            Line::from(vec![
-                Span::styled("click buttons or press [a] / [r]", Style::default().fg(Color::DarkGray)),
-            ])
-        };
-        f.render_widget(Paragraph::new(status_text), msg_rect);
+            let action_split = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Length(24),
+                    Constraint::Length(16),
+                    Constraint::Min(10),
+                ])
+                .split(action_bar_area);
+
+            let apply_rect = action_split[0];
+            let rollback_rect = action_split[1];
+            let msg_rect = action_split[2];
+
+            let apply_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::White));
+            let apply_text = Line::from(Span::styled(" [ ✓ Apply Patch to Disk ] ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)));
+            f.render_widget(Paragraph::new(apply_text).centered().block(apply_block), apply_rect);
+
+            let roll_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray));
+            let roll_text = Line::from(Span::styled(" [ ↩ Rollback ] ", Style::default().fg(Color::Gray)));
+            f.render_widget(Paragraph::new(roll_text).centered().block(roll_block), rollback_rect);
+
+            let status_text = if let Some(msg) = action_msg {
+                Line::from(vec![
+                    Span::styled("status: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(msg, Style::default().fg(Color::White)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled("click buttons or press [a] / [r]", Style::default().fg(Color::DarkGray)),
+                ])
+            };
+            f.render_widget(Paragraph::new(status_text), msg_rect);
+
+            btn_apply = Some(apply_rect);
+            btn_rollback = Some(rollback_rect);
+        }
 
         // Diff Viewer
         let diff_block = Block::default()
@@ -182,8 +195,8 @@ impl PatchView {
 
         PatchClickTargets {
             list_area: chunks[0],
-            btn_apply: Some(apply_rect),
-            btn_rollback: Some(rollback_rect),
+            btn_apply,
+            btn_rollback,
         }
     }
 }

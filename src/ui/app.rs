@@ -7,8 +7,8 @@ use crate::types::{
     SproutedNodeInfo, VulnerabilityFinding, WorkspaceProfile,
 };
 use crate::ui::views::{
-    GraphView, LogsView, MatrixView, ModalView, PatchClickTargets, PatchView, SidebarClickTargets,
-    SidebarView, SkillsView, WelcomeView,
+    GraphView, LogsView, MatrixView, ModalClickTargets, ModalView, PatchClickTargets, PatchView,
+    SidebarClickTargets, SidebarView, SkillsView, WelcomeView,
 };
 use chrono::Utc;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -39,6 +39,7 @@ pub struct AppClickTargets {
     pub sidebar: Option<SidebarClickTargets>,
     pub findings_table: Option<Rect>,
     pub patches: Option<PatchClickTargets>,
+    pub modal: Option<ModalClickTargets>,
 }
 
 pub struct App {
@@ -70,7 +71,10 @@ pub struct App {
     pub config: AppConfig,
     pub expanded_messages: HashSet<usize>,
     pub show_key_modal: bool,
+    pub modal_field: usize,
     pub key_modal_input: String,
+    pub model_modal_input: String,
+    pub url_modal_input: String,
     pub key_modal_error: Option<String>,
     pub suggestion_index: usize,
     pub should_quit: bool,
@@ -121,7 +125,10 @@ impl App {
             config,
             expanded_messages: HashSet::new(),
             show_key_modal: false,
+            modal_field: 0,
             key_modal_input: String::new(),
+            model_modal_input: String::new(),
+            url_modal_input: String::new(),
             key_modal_error: None,
             suggestion_index: 0,
             should_quit: false,
@@ -133,13 +140,22 @@ impl App {
         }
     }
 
+    pub fn open_config_modal(&mut self, initial_field: usize) {
+        self.show_key_modal = true;
+        self.modal_field = initial_field;
+        self.key_modal_error = None;
+        self.key_modal_input = self.config.get_api_key().unwrap_or_default();
+        self.model_modal_input = self.config.get_model();
+        self.url_modal_input = self.config.get_base_url().unwrap_or_default();
+    }
+
     pub fn trigger_audit(&mut self) {
         if self.is_running {
             return;
         }
 
         if !self.config.is_api_key_configured() {
-            self.show_key_modal = true;
+            self.open_config_modal(2);
             self.action_msg = Some("API key required to execute defense workflow.".to_string());
             return;
         }
@@ -304,6 +320,27 @@ impl App {
         res || self.should_quit
     }
 
+    pub fn save_modal_config(&mut self) -> bool {
+        self.config.provider = self.active_provider;
+        let m = self.model_modal_input.trim();
+        self.config.model = if m.is_empty() { None } else { Some(m.to_string()) };
+
+        let u = self.url_modal_input.trim();
+        self.config.base_url = if u.is_empty() { None } else { Some(u.to_string()) };
+
+        let k = self.key_modal_input.trim();
+        if k.is_empty() && self.active_provider != AiProvider::OllamaLocal && self.active_provider != AiProvider::Custom {
+            self.key_modal_error = Some("API key cannot be empty for this provider.".to_string());
+            return false;
+        }
+        self.config.api_key = if k.is_empty() { None } else { Some(k.to_string()) };
+        let _ = self.config.save();
+        self.show_key_modal = false;
+        self.key_modal_error = None;
+        self.action_msg = Some(format!("configuration applied for {}.", self.active_provider.name()));
+        true
+    }
+
     fn handle_modal_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc => {
@@ -311,35 +348,73 @@ impl App {
                 self.key_modal_error = None;
                 false
             }
-            KeyCode::Tab => {
-                self.active_provider = self.active_provider.next();
-                self.config.provider = self.active_provider;
-                let _ = self.config.save();
+            KeyCode::Tab | KeyCode::Down => {
+                self.modal_field = (self.modal_field + 1) % 4;
+                false
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                self.modal_field = if self.modal_field == 0 { 3 } else { self.modal_field - 1 };
                 false
             }
             KeyCode::Enter => {
-                let trimmed = self.key_modal_input.trim().to_string();
-                if trimmed.is_empty() {
-                    self.key_modal_error = Some("API key cannot be empty.".to_string());
+                self.save_modal_config();
+                false
+            }
+            KeyCode::Left if self.modal_field == 0 => {
+                let all = AiProvider::ALL;
+                let cur_idx = all.iter().position(|p| *p == self.active_provider).unwrap_or(0);
+                let prev_idx = if cur_idx == 0 { all.len() - 1 } else { cur_idx - 1 };
+                self.active_provider = all[prev_idx];
+                self.config.provider = self.active_provider;
+                self.model_modal_input = self.active_provider.default_model().to_string();
+                if let Some(u) = self.active_provider.default_base_url() {
+                    self.url_modal_input = u.to_string();
                 } else {
-                    self.config.api_key = Some(trimmed);
-                    let _ = self.config.save();
-                    self.show_key_modal = false;
-                    self.key_modal_error = None;
-                    self.chat_messages.push(ChatMessage::System(format!(
-                        "✓ Authenticated {} with configured API key.",
-                        self.active_provider.name()
-                    )));
-                    self.action_msg = Some("authenticated.".to_string());
+                    self.url_modal_input.clear();
+                }
+                false
+            }
+            KeyCode::Right if self.modal_field == 0 => {
+                self.active_provider = self.active_provider.next();
+                self.config.provider = self.active_provider;
+                self.model_modal_input = self.active_provider.default_model().to_string();
+                if let Some(u) = self.active_provider.default_base_url() {
+                    self.url_modal_input = u.to_string();
+                } else {
+                    self.url_modal_input.clear();
+                }
+                false
+            }
+            KeyCode::Char(c @ '1'..='6') if self.modal_field == 0 => {
+                let idx = (c as usize) - ('1' as usize);
+                if let Some(p) = AiProvider::ALL.get(idx) {
+                    self.active_provider = *p;
+                    self.config.provider = *p;
+                    self.model_modal_input = p.default_model().to_string();
+                    if let Some(u) = p.default_base_url() {
+                        self.url_modal_input = u.to_string();
+                    } else {
+                        self.url_modal_input.clear();
+                    }
                 }
                 false
             }
             KeyCode::Backspace => {
-                self.key_modal_input.pop();
+                match self.modal_field {
+                    1 => { self.model_modal_input.pop(); }
+                    2 => { self.key_modal_input.pop(); }
+                    3 => { self.url_modal_input.pop(); }
+                    _ => {}
+                }
                 false
             }
             KeyCode::Char(c) => {
-                self.key_modal_input.push(c);
+                match self.modal_field {
+                    1 => { self.model_modal_input.push(c); }
+                    2 => { self.key_modal_input.push(c); }
+                    3 => { self.url_modal_input.push(c); }
+                    _ => {}
+                }
                 false
             }
             _ => false,
@@ -358,7 +433,7 @@ impl App {
             }
             KeyCode::Enter => {
                 if !self.config.is_api_key_configured() {
-                    self.show_key_modal = true;
+                    self.open_config_modal(2);
                     self.action_msg = Some("authentication required: please set API key to proceed.".to_string());
                     return false;
                 }
@@ -512,7 +587,7 @@ impl App {
             }
             KeyCode::Char(' ') if self.prompt_input.is_empty() => {
                 if !self.config.is_api_key_configured() {
-                    self.show_key_modal = true;
+                    self.open_config_modal(2);
                     self.action_msg = Some("authentication required: please set API key to run audit.".to_string());
                 } else {
                     self.trigger_audit();
@@ -598,26 +673,12 @@ impl App {
                            - `[↑/↓]`: Navigate list / suggestions │ `[Tab]`: Autocomplete command │ `[Esc]`: Clear / Cancel".to_string(),
                 });
             } else if input == "/model" || input == "model" {
-                self.chat_messages.push(ChatMessage::Agent {
-                    sender: "orchestrator".to_string(),
-                    text: format!(
-                        "### Model Configuration\n- **Active Provider**: {}\n- **Target Model**: `{}`\n\n*Usage:* `/model <model_name>`\n*Examples:*\n- `/model gpt-4o`\n- `/model claude-3-7-sonnet`\n- `/model gemini-2.0-flash`\n- `/model deepseek-chat`\n- `/model qwen2.5-coder:7b`",
-                        self.active_provider.name(),
-                        self.config.get_model()
-                    ),
-                });
+                self.open_config_modal(1);
             } else if let Some(model_str) = input.strip_prefix("/model ") {
                 let model = model_str.trim().to_string();
                 self.config.model = Some(model.clone());
                 let _ = self.config.save();
-                self.chat_messages.push(ChatMessage::Agent {
-                    sender: "orchestrator".to_string(),
-                    text: format!(
-                        "✓ Successfully configured model to: `{}` for provider **{}**.",
-                        model,
-                        self.active_provider.name()
-                    ),
-                });
+                self.action_msg = Some(format!("model configured: {model}"));
             } else if input == "/pause" || input == "pause" {
                 self.toggle_pause_selected_node();
             } else if input == "/apply" || input == "apply" || input == "a" {
@@ -629,18 +690,7 @@ impl App {
             } else if input == "/scan" || input == "scan" {
                 self.trigger_audit();
             } else if input == "/provider" {
-                self.active_provider = self.active_provider.next();
-                self.config.provider = self.active_provider;
-                let _ = self.config.save();
-                self.chat_messages.push(ChatMessage::Agent {
-                    sender: "orchestrator".to_string(),
-                    text: format!(
-                        "Switched active AI provider to **{}**.\n- Model: `{}`\n- Endpoint: `{}`",
-                        self.active_provider.name(),
-                        self.config.get_model(),
-                        self.config.get_base_url().unwrap_or_else(|| "provider default".to_string())
-                    ),
-                });
+                self.open_config_modal(0);
             } else if let Some(prov_str) = input.strip_prefix("/provider ") {
                 let lower = prov_str.trim().to_lowercase();
                 if lower.contains("custom") {
@@ -658,56 +708,26 @@ impl App {
                 }
                 self.config.provider = self.active_provider;
                 let _ = self.config.save();
-                self.chat_messages.push(ChatMessage::Agent {
-                    sender: "orchestrator".to_string(),
-                    text: format!(
-                        "Configured active AI provider to **{}**.\n- Model: `{}`\n- Endpoint: `{}`\n- API Key: `{}`",
-                        self.active_provider.name(),
-                        self.config.get_model(),
-                        self.config.get_base_url().unwrap_or_else(|| "provider default".to_string()),
-                        self.config.mask_key()
-                    ),
-                });
+                self.action_msg = Some(format!("provider switched to {}", self.active_provider.name()));
             } else if input == "/key" {
-                self.show_key_modal = true;
-                self.action_msg = Some("enter API key in modal dialog.".to_string());
+                self.open_config_modal(2);
             } else if let Some(key_str) = input.strip_prefix("/key ") {
                 let key = key_str.trim().to_string();
                 self.config.api_key = Some(key);
                 let _ = self.config.save();
-                self.chat_messages.push(ChatMessage::Agent {
-                    sender: "orchestrator".to_string(),
-                    text: format!(
-                        "✓ Successfully saved API key for **{}**: `{}` (stored in `~/.config/constellation/config.json`).",
-                        self.active_provider.name(),
-                        self.config.mask_key()
-                    ),
-                });
+                self.action_msg = Some("API key saved.".to_string());
+            } else if input == "/url" {
+                self.open_config_modal(3);
             } else if let Some(url_str) = input.strip_prefix("/url ") {
                 let url = url_str.trim().to_string();
                 self.config.base_url = Some(url.clone());
                 let _ = self.config.save();
-                self.chat_messages.push(ChatMessage::Agent {
-                    sender: "orchestrator".to_string(),
-                    text: format!(
-                        "✓ Successfully configured API endpoint base URL to: `{}`.",
-                        url
-                    ),
-                });
-            } else if input == "/config" || input == "/status" {
-                self.chat_messages.push(ChatMessage::Agent {
-                    sender: "orchestrator".to_string(),
-                    text: format!(
-                        "### Production AI Provider Configuration\n- **Provider**: {}\n- **Target Model**: `{}`\n- **Endpoint URL**: `{}`\n- **API Key**: `{}`\n\n*Commands:*\n- `/provider <custom|openai|claude|gemini|deepseek|ollama>`\n- `/key <api_key>`\n- `/url <base_url>`\n- `/model <model_name>`",
-                        self.active_provider.name(),
-                        self.config.get_model(),
-                        self.config.get_base_url().unwrap_or_else(|| "default".to_string()),
-                        self.config.mask_key()
-                    ),
-                });
+                self.action_msg = Some(format!("endpoint URL updated: {url}"));
+            } else if input == "/config" || input == "/status" || input == "/settings" {
+                self.open_config_modal(0);
             } else {
                 if !self.config.is_api_key_configured() {
-                    self.show_key_modal = true;
+                    self.open_config_modal(2);
                     self.action_msg = Some("authentication required: please set API key.".to_string());
                     return false;
                 }
@@ -771,13 +791,57 @@ impl App {
     }
 
     pub fn handle_mouse(&mut self, mouse: MouseEvent) {
-        if self.show_key_modal {
-            return;
-        }
-
         let col = mouse.column;
         let row = mouse.row;
         let is_left_click = matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left));
+
+        if self.show_key_modal {
+            if is_left_click {
+                if let Some(modal_targets) = &self.click_targets.modal {
+                    if let Some(btn_save) = modal_targets.btn_save {
+                        if in_rect(btn_save, col, row) {
+                            self.save_modal_config();
+                            return;
+                        }
+                    }
+                    if let Some(btn_cancel) = modal_targets.btn_cancel {
+                        if in_rect(btn_cancel, col, row) {
+                            self.show_key_modal = false;
+                            self.key_modal_error = None;
+                            return;
+                        }
+                    }
+                    for (provider, rect) in &modal_targets.provider_buttons {
+                        if in_rect(*rect, col, row) {
+                            self.active_provider = *provider;
+                            self.config.provider = *provider;
+                            self.model_modal_input = provider.default_model().to_string();
+                            if let Some(u) = provider.default_base_url() {
+                                self.url_modal_input = u.to_string();
+                            } else {
+                                self.url_modal_input.clear();
+                            }
+                            self.modal_field = 0;
+                            return;
+                        }
+                    }
+                    for (preset, rect) in &modal_targets.model_preset_buttons {
+                        if in_rect(*rect, col, row) {
+                            self.model_modal_input = preset.clone();
+                            self.modal_field = 1;
+                            return;
+                        }
+                    }
+                    for (field_idx, rect) in &modal_targets.field_rects {
+                        if in_rect(*rect, col, row) {
+                            self.modal_field = *field_idx;
+                            return;
+                        }
+                    }
+                }
+            }
+            return;
+        }
 
         // Scroll handlers (inspired by SynapsCLI's mouse wheel scrolling)
         if matches!(mouse.kind, MouseEventKind::ScrollUp) {
@@ -799,7 +863,7 @@ impl App {
                 if let Some(btn) = self.click_targets.welcome_btn {
                     if in_rect(btn, col, row) {
                         if !self.config.is_api_key_configured() {
-                            self.show_key_modal = true;
+                            self.open_config_modal(2);
                             self.action_msg = Some("authentication required: please set API key.".to_string());
                             return;
                         }
@@ -979,13 +1043,19 @@ impl App {
         }
 
         if self.show_key_modal {
-            ModalView::render_key_modal(
+            let modal_targets = ModalView::render_config_modal(
                 f,
                 area,
                 self.active_provider,
+                self.modal_field,
+                &self.model_modal_input,
                 &self.key_modal_input,
+                &self.url_modal_input,
                 self.key_modal_error.as_deref(),
             );
+            self.click_targets.modal = Some(modal_targets);
+        } else {
+            self.click_targets.modal = None;
         }
     }
 

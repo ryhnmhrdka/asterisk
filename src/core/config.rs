@@ -145,6 +145,7 @@ impl AppConfig {
         self.get_api_key().is_some()
     }
 
+    #[allow(dead_code)]
     pub fn mask_key(&self) -> String {
         match self.get_api_key() {
             Some(k) if k.len() > 8 => {

@@ -10,7 +10,7 @@ pub mod welcome_view;
 pub use graph_view::GraphView;
 pub use logs_view::LogsView;
 pub use matrix_view::MatrixView;
-pub use modal_view::ModalView;
+pub use modal_view::{ModalClickTargets, ModalView};
 pub use patch_view::{PatchClickTargets, PatchView};
 pub use sidebar_view::{SidebarClickTargets, SidebarView};
 pub use skills_view::SkillsView;

@@ -106,6 +106,15 @@ pub enum AiProvider {
 }
 
 impl AiProvider {
+    pub const ALL: [AiProvider; 6] = [
+        AiProvider::AnthropicClaude,
+        AiProvider::OpenAiGpt4o,
+        AiProvider::GoogleGemini,
+        AiProvider::DeepSeek,
+        AiProvider::OllamaLocal,
+        AiProvider::Custom,
+    ];
+
     pub fn name(&self) -> &'static str {
         match self {
             AiProvider::AnthropicClaude => "Anthropic Claude",
@@ -114,6 +123,26 @@ impl AiProvider {
             AiProvider::DeepSeek => "DeepSeek",
             AiProvider::Custom => "Custom Provider",
             AiProvider::OllamaLocal => "Ollama Local",
+        }
+    }
+
+    pub fn preset_models(&self) -> &'static [&'static str] {
+        match self {
+            AiProvider::AnthropicClaude => &[
+                "claude-3-7-sonnet-20250219",
+                "claude-3-5-sonnet-20241022",
+                "claude-3-5-haiku-20241022",
+            ],
+            AiProvider::OpenAiGpt4o => &["gpt-4o", "gpt-4o-mini", "o3-mini", "o1"],
+            AiProvider::GoogleGemini => &["gemini-2.0-flash", "gemini-1.5-pro", "gemini-2.5-flash"],
+            AiProvider::DeepSeek => &["deepseek-chat", "deepseek-reasoner"],
+            AiProvider::OllamaLocal => &[
+                "llama3.2",
+                "qwen2.5-coder:7b",
+                "llama3.3:70b",
+                "deepseek-r1:8b",
+            ],
+            AiProvider::Custom => &["gpt-4o", "meta-llama/Llama-3.3-70B-Instruct"],
         }
     }
 
@@ -204,28 +233,28 @@ pub const AVAILABLE_COMMANDS: &[CommandSuggestion] = &[
     },
     CommandSuggestion {
         name: "/model",
-        args: "<name>",
-        description: "View or change target LLM model",
+        args: "[name]",
+        description: "Open model selection popup or set model",
     },
     CommandSuggestion {
         name: "/provider",
-        args: "<name>",
-        description: "Switch AI provider (custom, claude, openai, etc.)",
+        args: "[name]",
+        description: "Open provider popup or switch provider",
     },
     CommandSuggestion {
         name: "/key",
-        args: "<api_key>",
-        description: "Set provider API key or open auth modal",
+        args: "[api_key]",
+        description: "Open API key configuration popup",
     },
     CommandSuggestion {
         name: "/url",
-        args: "<base_url>",
-        description: "Set custom API endpoint URL",
+        args: "[base_url]",
+        description: "Open endpoint URL configuration popup",
     },
     CommandSuggestion {
         name: "/config",
         args: "",
-        description: "Display active AI provider configuration & status",
+        description: "Open AI provider & model settings popup",
     },
     CommandSuggestion {
         name: "/apply",

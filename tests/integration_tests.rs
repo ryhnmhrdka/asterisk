@@ -155,12 +155,15 @@ fn test_command_suggestions_and_execution() {
         panic!("Expected Agent message with command reference table");
     }
 
-    // 4. Test /model command execution
+    // 4. Test /model command opens configuration popup modal (not inline in orchestrator chat)
     app.prompt_input = "/model".to_string();
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
-    if let Some(ChatMessage::Agent { text, .. }) = app.chat_messages.last() {
-        assert!(text.contains("Model Configuration"));
-    }
+    assert!(app.show_key_modal, "/model must open the popup modal");
+    assert_eq!(app.modal_field, 1, "modal must focus on model field (1)");
+
+    // Press Esc to dismiss the modal
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+    assert!(!app.show_key_modal, "Esc must close the modal");
 
     // 5. Test /exit command execution
     app.prompt_input = "/exit".to_string();

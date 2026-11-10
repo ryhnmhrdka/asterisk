@@ -170,3 +170,57 @@ fn test_command_suggestions_and_execution() {
     let quit = app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
     assert!(quit || app.should_quit, "/exit must signal application termination");
 }
+
+#[test]
+fn test_provider_model_selector_and_custom_provider_setup_flow() {
+    use constellation::types::AiProvider;
+    use constellation::ui::app::ActiveModal;
+    use constellation::ui::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = App::new(PathBuf::from("."), false);
+
+    // 1. /model and /provider must open the dedicated ProviderModelSelect modal
+    app.prompt_input = "/model".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert!(app.show_key_modal);
+    assert_eq!(app.active_modal, ActiveModal::ProviderModelSelect);
+
+    // Selecting provider 2 (OpenAI) via keypress
+    app.handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::empty()));
+    assert_eq!(app.active_provider, AiProvider::OpenAiGpt4o);
+
+    // Navigating models and pressing Enter applies model & closes modal
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::empty()));
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert!(!app.show_key_modal);
+    assert_eq!(app.active_modal, ActiveModal::None);
+    assert_eq!(app.config.provider, AiProvider::OpenAiGpt4o);
+
+    // 2. /custom command must open the integrated ProviderSetup flow for custom endpoints
+    app.prompt_input = "/custom".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert!(app.show_key_modal);
+    assert_eq!(app.active_modal, ActiveModal::ProviderSetup);
+    assert_eq!(app.active_provider, AiProvider::Custom);
+
+    // Setting custom endpoint URL (Field 1)
+    app.modal_field = 1;
+    app.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::empty()));
+    app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::empty()));
+    app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::empty()));
+    app.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::empty()));
+    assert!(app.url_modal_input.contains("http"));
+
+    // Setting API key (Field 2)
+    app.modal_field = 2;
+    app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::empty()));
+    app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::empty()));
+    app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::empty()));
+    assert!(app.key_modal_input.contains("key"));
+
+    // Save and connect
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert!(!app.show_key_modal);
+    assert_eq!(app.config.provider, AiProvider::Custom);
+}

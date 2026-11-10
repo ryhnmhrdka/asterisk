@@ -239,7 +239,12 @@ pub const AVAILABLE_COMMANDS: &[CommandSuggestion] = &[
     CommandSuggestion {
         name: "/provider",
         args: "[name]",
-        description: "Open provider popup or switch provider",
+        description: "Open supported provider list or switch provider",
+    },
+    CommandSuggestion {
+        name: "/custom",
+        args: "[url]",
+        description: "Add & configure custom AI provider endpoint & credentials",
     },
     CommandSuggestion {
         name: "/key",

@@ -32,6 +32,15 @@ pub enum AppMode {
     Workspace,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActiveModal {
+    None,
+    /// Dedicated modal: list supported providers and supported models
+    ProviderModelSelect,
+    /// Integrated 1-flow modal: add/configure provider, custom endpoint URL & API key
+    ProviderSetup,
+}
+
 #[derive(Default)]
 pub struct AppClickTargets {
     pub welcome_btn: Option<Rect>,
@@ -71,6 +80,8 @@ pub struct App {
     pub config: AppConfig,
     pub expanded_messages: HashSet<usize>,
     pub show_key_modal: bool,
+    pub active_modal: ActiveModal,
+    pub selected_model_index: usize,
     pub modal_field: usize,
     pub key_modal_input: String,
     pub model_modal_input: String,
@@ -125,6 +136,8 @@ impl App {
             config,
             expanded_messages: HashSet::new(),
             show_key_modal: false,
+            active_modal: ActiveModal::None,
+            selected_model_index: 0,
             modal_field: 0,
             key_modal_input: String::new(),
             model_modal_input: String::new(),
@@ -140,13 +153,32 @@ impl App {
         }
     }
 
-    pub fn open_config_modal(&mut self, initial_field: usize) {
+    pub fn open_provider_model_modal(&mut self, initial_field: usize) {
         self.show_key_modal = true;
+        self.active_modal = ActiveModal::ProviderModelSelect;
+        self.modal_field = initial_field;
+        self.key_modal_error = None;
+        self.model_modal_input = self.config.get_model();
+        let presets = self.active_provider.preset_models();
+        self.selected_model_index = presets.iter().position(|m| *m == self.model_modal_input).unwrap_or(0);
+    }
+
+    pub fn open_setup_modal(&mut self, initial_field: usize) {
+        self.show_key_modal = true;
+        self.active_modal = ActiveModal::ProviderSetup;
         self.modal_field = initial_field;
         self.key_modal_error = None;
         self.key_modal_input = self.config.get_api_key().unwrap_or_default();
         self.model_modal_input = self.config.get_model();
         self.url_modal_input = self.config.get_base_url().unwrap_or_default();
+    }
+
+    pub fn open_config_modal(&mut self, initial_field: usize) {
+        if initial_field == 0 || initial_field == 1 {
+            self.open_provider_model_modal(initial_field);
+        } else {
+            self.open_setup_modal(initial_field);
+        }
     }
 
     pub fn trigger_audit(&mut self) {
@@ -155,7 +187,7 @@ impl App {
         }
 
         if !self.config.is_api_key_configured() {
-            self.open_config_modal(2);
+            self.open_setup_modal(2);
             self.action_msg = Some("API key required to execute defense workflow.".to_string());
             return;
         }
@@ -336,15 +368,105 @@ impl App {
         self.config.api_key = if k.is_empty() { None } else { Some(k.to_string()) };
         let _ = self.config.save();
         self.show_key_modal = false;
+        self.active_modal = ActiveModal::None;
         self.key_modal_error = None;
         self.action_msg = Some(format!("configuration applied for {}.", self.active_provider.name()));
         true
     }
 
     fn handle_modal_key(&mut self, key: KeyEvent) -> bool {
+        match self.active_modal {
+            ActiveModal::ProviderModelSelect => self.handle_provider_model_key(key),
+            ActiveModal::ProviderSetup | ActiveModal::None => self.handle_setup_key(key),
+        }
+    }
+
+    fn handle_provider_model_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc => {
                 self.show_key_modal = false;
+                self.active_modal = ActiveModal::None;
+                false
+            }
+            KeyCode::Char('+') | KeyCode::Char('c') => {
+                self.open_setup_modal(0);
+                false
+            }
+            KeyCode::Left => {
+                let all = AiProvider::ALL;
+                let cur_idx = all.iter().position(|p| *p == self.active_provider).unwrap_or(0);
+                let prev_idx = if cur_idx == 0 { all.len() - 1 } else { cur_idx - 1 };
+                self.active_provider = all[prev_idx];
+                self.config.provider = self.active_provider;
+                self.selected_model_index = 0;
+                self.model_modal_input = self.active_provider.default_model().to_string();
+                false
+            }
+            KeyCode::Right => {
+                self.active_provider = self.active_provider.next();
+                self.config.provider = self.active_provider;
+                self.selected_model_index = 0;
+                self.model_modal_input = self.active_provider.default_model().to_string();
+                false
+            }
+            KeyCode::Char(c @ '1'..='6') => {
+                let idx = (c as usize) - ('1' as usize);
+                if let Some(p) = AiProvider::ALL.get(idx) {
+                    self.active_provider = *p;
+                    self.config.provider = *p;
+                    self.selected_model_index = 0;
+                    self.model_modal_input = p.default_model().to_string();
+                }
+                false
+            }
+            KeyCode::Up => {
+                let presets = self.active_provider.preset_models();
+                if !presets.is_empty() {
+                    if self.selected_model_index > 0 {
+                        self.selected_model_index -= 1;
+                    } else {
+                        self.selected_model_index = presets.len() - 1;
+                    }
+                    self.model_modal_input = presets[self.selected_model_index].to_string();
+                }
+                false
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                let presets = self.active_provider.preset_models();
+                if !presets.is_empty() {
+                    if self.selected_model_index + 1 < presets.len() {
+                        self.selected_model_index += 1;
+                    } else {
+                        self.selected_model_index = 0;
+                    }
+                    self.model_modal_input = presets[self.selected_model_index].to_string();
+                }
+                false
+            }
+            KeyCode::Enter => {
+                self.config.provider = self.active_provider;
+                let presets = self.active_provider.preset_models();
+                let chosen = if let Some(m) = presets.get(self.selected_model_index) {
+                    m.to_string()
+                } else {
+                    self.model_modal_input.clone()
+                };
+                self.config.model = Some(chosen.clone());
+                let _ = self.config.save();
+                self.show_key_modal = false;
+                self.active_modal = ActiveModal::None;
+                self.action_msg = Some(format!("provider & model set to {} / {chosen}.", self.active_provider.name()));
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn handle_setup_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                self.show_key_modal = false;
+                self.active_modal = ActiveModal::None;
                 self.key_modal_error = None;
                 false
             }
@@ -401,18 +523,18 @@ impl App {
             }
             KeyCode::Backspace => {
                 match self.modal_field {
-                    1 => { self.model_modal_input.pop(); }
+                    1 => { self.url_modal_input.pop(); }
                     2 => { self.key_modal_input.pop(); }
-                    3 => { self.url_modal_input.pop(); }
+                    3 => { self.model_modal_input.pop(); }
                     _ => {}
                 }
                 false
             }
             KeyCode::Char(c) => {
                 match self.modal_field {
-                    1 => { self.model_modal_input.push(c); }
+                    1 => { self.url_modal_input.push(c); }
                     2 => { self.key_modal_input.push(c); }
-                    3 => { self.url_modal_input.push(c); }
+                    3 => { self.model_modal_input.push(c); }
                     _ => {}
                 }
                 false
@@ -654,11 +776,12 @@ impl App {
                            | Command | Description |\n\
                            | :--- | :--- |\n\
                            | `/scan` | Execute autonomous code defense scan & AST flow |\n\
-                           | `/model [name]` | View or change target LLM model |\n\
-                           | `/provider [name]` | Switch provider (`custom`, `claude`, `openai`, `gemini`, `deepseek`, `ollama`) |\n\
-                           | `/key [api_key]` | Set API key or open authentication modal |\n\
-                           | `/url [endpoint]` | Set custom API base URL |\n\
-                           | `/config` | Display provider connection & credential status |\n\
+                           | `/model [name]` | Open supported model selector modal or set model |\n\
+                           | `/provider [name]` | Open supported provider list or switch provider |\n\
+                           | `/custom [url]` | Add & configure custom AI provider endpoint & credentials |\n\
+                           | `/key [api_key]` | Open credentials setup or set API key |\n\
+                           | `/url [endpoint]` | Open endpoint setup or set base URL |\n\
+                           | `/config` | Display provider credentials & connection setup |\n\
                            | `/apply` | Apply selected hardening patch to source code |\n\
                            | `/rollback` | Rollback previously applied hardening patch |\n\
                            | `/export` | Export defense audit report to HTML & Markdown |\n\
@@ -673,7 +796,7 @@ impl App {
                            - `[↑/↓]`: Navigate list / suggestions │ `[Tab]`: Autocomplete command │ `[Esc]`: Clear / Cancel".to_string(),
                 });
             } else if input == "/model" || input == "model" {
-                self.open_config_modal(1);
+                self.open_provider_model_modal(1);
             } else if let Some(model_str) = input.strip_prefix("/model ") {
                 let model = model_str.trim().to_string();
                 self.config.model = Some(model.clone());
@@ -690,7 +813,7 @@ impl App {
             } else if input == "/scan" || input == "scan" {
                 self.trigger_audit();
             } else if input == "/provider" {
-                self.open_config_modal(0);
+                self.open_provider_model_modal(0);
             } else if let Some(prov_str) = input.strip_prefix("/provider ") {
                 let lower = prov_str.trim().to_lowercase();
                 if lower.contains("custom") {
@@ -710,24 +833,34 @@ impl App {
                 let _ = self.config.save();
                 self.action_msg = Some(format!("provider switched to {}", self.active_provider.name()));
             } else if input == "/key" {
-                self.open_config_modal(2);
+                self.open_setup_modal(2);
             } else if let Some(key_str) = input.strip_prefix("/key ") {
                 let key = key_str.trim().to_string();
                 self.config.api_key = Some(key);
                 let _ = self.config.save();
                 self.action_msg = Some("API key saved.".to_string());
             } else if input == "/url" {
-                self.open_config_modal(3);
+                self.open_setup_modal(1);
             } else if let Some(url_str) = input.strip_prefix("/url ") {
                 let url = url_str.trim().to_string();
                 self.config.base_url = Some(url.clone());
                 let _ = self.config.save();
                 self.action_msg = Some(format!("endpoint URL updated: {url}"));
+            } else if input == "/custom" || input == "/add-provider" {
+                self.active_provider = AiProvider::Custom;
+                self.config.provider = AiProvider::Custom;
+                self.open_setup_modal(1);
+            } else if let Some(custom_url) = input.strip_prefix("/custom ") {
+                self.active_provider = AiProvider::Custom;
+                self.config.provider = AiProvider::Custom;
+                self.config.base_url = Some(custom_url.trim().to_string());
+                let _ = self.config.save();
+                self.open_setup_modal(2);
             } else if input == "/config" || input == "/status" || input == "/settings" {
-                self.open_config_modal(0);
+                self.open_setup_modal(0);
             } else {
                 if !self.config.is_api_key_configured() {
-                    self.open_config_modal(2);
+                    self.open_setup_modal(2);
                     self.action_msg = Some("authentication required: please set API key.".to_string());
                     return false;
                 }
@@ -798,6 +931,12 @@ impl App {
         if self.show_key_modal {
             if is_left_click {
                 if let Some(modal_targets) = &self.click_targets.modal {
+                    if let Some(btn_setup) = modal_targets.btn_setup_credentials {
+                        if in_rect(btn_setup, col, row) {
+                            self.open_setup_modal(0);
+                            return;
+                        }
+                    }
                     if let Some(btn_save) = modal_targets.btn_save {
                         if in_rect(btn_save, col, row) {
                             self.save_modal_config();
@@ -807,6 +946,7 @@ impl App {
                     if let Some(btn_cancel) = modal_targets.btn_cancel {
                         if in_rect(btn_cancel, col, row) {
                             self.show_key_modal = false;
+                            self.active_modal = ActiveModal::None;
                             self.key_modal_error = None;
                             return;
                         }
@@ -815,20 +955,29 @@ impl App {
                         if in_rect(*rect, col, row) {
                             self.active_provider = *provider;
                             self.config.provider = *provider;
+                            self.selected_model_index = 0;
                             self.model_modal_input = provider.default_model().to_string();
                             if let Some(u) = provider.default_base_url() {
                                 self.url_modal_input = u.to_string();
                             } else {
                                 self.url_modal_input.clear();
                             }
-                            self.modal_field = 0;
                             return;
                         }
                     }
                     for (preset, rect) in &modal_targets.model_preset_buttons {
                         if in_rect(*rect, col, row) {
-                            self.model_modal_input = preset.clone();
-                            self.modal_field = 1;
+                            if self.active_modal == ActiveModal::ProviderModelSelect {
+                                self.config.provider = self.active_provider;
+                                self.config.model = Some(preset.clone());
+                                let _ = self.config.save();
+                                self.show_key_modal = false;
+                                self.active_modal = ActiveModal::None;
+                                self.action_msg = Some(format!("model selected: {preset} ({})", self.active_provider.name()));
+                            } else {
+                                self.model_modal_input = preset.clone();
+                                self.modal_field = 3;
+                            }
                             return;
                         }
                     }
@@ -1043,16 +1192,28 @@ impl App {
         }
 
         if self.show_key_modal {
-            let modal_targets = ModalView::render_config_modal(
-                f,
-                area,
-                self.active_provider,
-                self.modal_field,
-                &self.model_modal_input,
-                &self.key_modal_input,
-                &self.url_modal_input,
-                self.key_modal_error.as_deref(),
-            );
+            let modal_targets = match self.active_modal {
+                ActiveModal::ProviderModelSelect => {
+                    ModalView::render_provider_model_selector(
+                        f,
+                        area,
+                        self.active_provider,
+                        self.selected_model_index,
+                    )
+                }
+                ActiveModal::ProviderSetup | ActiveModal::None => {
+                    ModalView::render_provider_setup_modal(
+                        f,
+                        area,
+                        self.active_provider,
+                        self.modal_field,
+                        &self.model_modal_input,
+                        &self.key_modal_input,
+                        &self.url_modal_input,
+                        self.key_modal_error.as_deref(),
+                    )
+                }
+            };
             self.click_targets.modal = Some(modal_targets);
         } else {
             self.click_targets.modal = None;

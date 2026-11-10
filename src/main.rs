@@ -132,12 +132,15 @@ fi
             loop {
                 match event::read()? {
                     Event::Key(key) => {
-                        if app.handle_key(key) {
+                        if app.handle_key(key) || app.should_quit {
                             break 'main;
                         }
                     }
                     Event::Mouse(mouse) => {
                         app.handle_mouse(mouse);
+                        if app.should_quit {
+                            break 'main;
+                        }
                     }
                     _ => {}
                 }

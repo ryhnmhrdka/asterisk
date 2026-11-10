@@ -188,3 +188,88 @@ pub struct SproutedNodeInfo {
     pub findings_count: usize,
     pub is_paused: bool,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandSuggestion {
+    pub name: &'static str,
+    pub args: &'static str,
+    pub description: &'static str,
+}
+
+pub const AVAILABLE_COMMANDS: &[CommandSuggestion] = &[
+    CommandSuggestion {
+        name: "/scan",
+        args: "",
+        description: "Run autonomous security audit on workspace",
+    },
+    CommandSuggestion {
+        name: "/model",
+        args: "<name>",
+        description: "View or change target LLM model",
+    },
+    CommandSuggestion {
+        name: "/provider",
+        args: "<name>",
+        description: "Switch AI provider (custom, claude, openai, etc.)",
+    },
+    CommandSuggestion {
+        name: "/key",
+        args: "<api_key>",
+        description: "Set provider API key or open auth modal",
+    },
+    CommandSuggestion {
+        name: "/url",
+        args: "<base_url>",
+        description: "Set custom API endpoint URL",
+    },
+    CommandSuggestion {
+        name: "/config",
+        args: "",
+        description: "Display active AI provider configuration & status",
+    },
+    CommandSuggestion {
+        name: "/apply",
+        args: "",
+        description: "Apply selected code hardening patch",
+    },
+    CommandSuggestion {
+        name: "/rollback",
+        args: "",
+        description: "Rollback applied hardening patch",
+    },
+    CommandSuggestion {
+        name: "/export",
+        args: "",
+        description: "Export defense report to HTML & Markdown",
+    },
+    CommandSuggestion {
+        name: "/pause",
+        args: "",
+        description: "Pause / resume selected agent in workflow",
+    },
+    CommandSuggestion {
+        name: "/clear",
+        args: "",
+        description: "Clear chat message history",
+    },
+    CommandSuggestion {
+        name: "/help",
+        args: "",
+        description: "Show command reference & keyboard shortcuts",
+    },
+    CommandSuggestion {
+        name: "/exit",
+        args: "",
+        description: "Exit constellation application cleanly",
+    },
+];
+
+pub fn get_matching_commands(input: &str) -> Vec<&'static CommandSuggestion> {
+    if !input.starts_with('/') || input.contains(' ') {
+        return Vec::new();
+    }
+    AVAILABLE_COMMANDS
+        .iter()
+        .filter(|c| c.name.starts_with(input))
+        .collect()
+}

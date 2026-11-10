@@ -3,8 +3,8 @@ use crate::orchestrator::{AgentGraphBuilder, DefensePlan, WorkspaceScanner};
 use crate::skills::SkillRegistry;
 use crate::subagents::AutoHardeningAgent;
 use crate::types::{
-    AgentStatus, AiProvider, ChatMessage, DynamicLogEntry, HardeningPatch, SproutedNodeInfo,
-    VulnerabilityFinding, WorkspaceProfile,
+    get_matching_commands, AgentStatus, AiProvider, ChatMessage, DynamicLogEntry, HardeningPatch,
+    SproutedNodeInfo, VulnerabilityFinding, WorkspaceProfile,
 };
 use crate::ui::views::{
     GraphView, LogsView, MatrixView, ModalView, PatchClickTargets, PatchView, SidebarClickTargets,
@@ -72,6 +72,8 @@ pub struct App {
     pub show_key_modal: bool,
     pub key_modal_input: String,
     pub key_modal_error: Option<String>,
+    pub suggestion_index: usize,
+    pub should_quit: bool,
 
     pub engine_rx: UnboundedReceiver<EngineMessage>,
     pub engine_tx: UnboundedSender<EngineMessage>,
@@ -121,6 +123,8 @@ impl App {
             show_key_modal: false,
             key_modal_input: String::new(),
             key_modal_error: None,
+            suggestion_index: 0,
+            should_quit: false,
             engine_rx: rx,
             engine_tx: tx,
             cmd_tx,
@@ -281,6 +285,10 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
+        if self.should_quit {
+            return true;
+        }
+
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return true;
         }
@@ -289,10 +297,11 @@ impl App {
             return self.handle_modal_key(key);
         }
 
-        match self.mode {
+        let res = match self.mode {
             AppMode::Welcome => self.handle_welcome_key(key),
             AppMode::Workspace => self.handle_workspace_key(key),
-        }
+        };
+        res || self.should_quit
     }
 
     fn handle_modal_key(&mut self, key: KeyEvent) -> bool {
@@ -392,10 +401,74 @@ impl App {
             return true;
         }
 
+        let suggestions = get_matching_commands(&self.prompt_input);
+        let has_suggestions = !suggestions.is_empty();
+
+        if has_suggestions {
+            match key.code {
+                KeyCode::Up => {
+                    if self.suggestion_index > 0 {
+                        self.suggestion_index -= 1;
+                    } else {
+                        self.suggestion_index = suggestions.len().saturating_sub(1);
+                    }
+                    return false;
+                }
+                KeyCode::Down => {
+                    if self.suggestion_index + 1 < suggestions.len() {
+                        self.suggestion_index += 1;
+                    } else {
+                        self.suggestion_index = 0;
+                    }
+                    return false;
+                }
+                KeyCode::Tab => {
+                    if let Some(cmd) = suggestions.get(self.suggestion_index) {
+                        self.prompt_input = if cmd.args.is_empty() {
+                            cmd.name.to_string()
+                        } else {
+                            format!("{} ", cmd.name)
+                        };
+                        self.suggestion_index = 0;
+                    }
+                    return false;
+                }
+                KeyCode::Esc => {
+                    self.prompt_input.clear();
+                    self.suggestion_index = 0;
+                    return false;
+                }
+                KeyCode::Enter => {
+                    if let Some(cmd) = suggestions.get(self.suggestion_index) {
+                        if self.prompt_input == cmd.name || cmd.args.is_empty() {
+                            self.prompt_input = cmd.name.to_string();
+                            return self.submit_prompt_input();
+                        } else {
+                            self.prompt_input = format!("{} ", cmd.name);
+                            self.suggestion_index = 0;
+                            return false;
+                        }
+                    }
+                }
+                KeyCode::Backspace => {
+                    self.prompt_input.pop();
+                    self.suggestion_index = 0;
+                    return false;
+                }
+                KeyCode::Char(c) => {
+                    self.prompt_input.push(c);
+                    self.suggestion_index = 0;
+                    return false;
+                }
+                _ => {}
+            }
+        }
+
         match key.code {
             KeyCode::Esc => {
                 if !self.prompt_input.is_empty() {
                     self.prompt_input.clear();
+                    self.suggestion_index = 0;
                 } else {
                     return true;
                 }
@@ -413,10 +486,11 @@ impl App {
             }
 
             KeyCode::Enter => {
-                self.submit_prompt_input();
+                return self.submit_prompt_input();
             }
             KeyCode::Backspace => {
                 self.prompt_input.pop();
+                self.suggestion_index = 0;
             }
             KeyCode::Char('p') if self.prompt_input.is_empty() => {
                 if self.is_running {
@@ -460,6 +534,7 @@ impl App {
             }
             KeyCode::Char(c) => {
                 self.prompt_input.push(c);
+                self.suggestion_index = 0;
             }
             _ => {
                 if self.current_tab == 0 {
@@ -473,24 +548,77 @@ impl App {
         false
     }
 
-    pub fn submit_prompt_input(&mut self) {
+    pub fn submit_prompt_input(&mut self) -> bool {
         let input = self.prompt_input.trim().to_string();
         self.prompt_input.clear();
+        self.suggestion_index = 0;
 
         if self.awaiting_confirmation {
             if input.is_empty() || input.eq_ignore_ascii_case("y") || input.eq_ignore_ascii_case("yes") {
                 self.confirm_subagent_deployment();
-                return;
+                return false;
             } else if input.eq_ignore_ascii_case("n") || input.eq_ignore_ascii_case("no") {
                 self.cancel_subagent_deployment();
-                return;
+                return false;
             }
         }
 
         if !input.is_empty() {
             self.chat_messages.push(ChatMessage::User(input.clone()));
 
-            if input == "/pause" || input == "pause" {
+            if input == "/exit" || input == "/quit" || input == "exit" || input == "quit" {
+                self.should_quit = true;
+                return true;
+            } else if input == "/clear" || input == "clear" {
+                self.chat_messages.clear();
+                self.action_msg = Some("chat history cleared".to_string());
+            } else if input == "/help" || input == "help" {
+                self.chat_messages.push(ChatMessage::Agent {
+                    sender: "orchestrator".to_string(),
+                    text: "### Constellation Security Defense Command Reference\n\n\
+                           | Command | Description |\n\
+                           | :--- | :--- |\n\
+                           | `/scan` | Execute autonomous code defense scan & AST flow |\n\
+                           | `/model [name]` | View or change target LLM model |\n\
+                           | `/provider [name]` | Switch provider (`custom`, `claude`, `openai`, `gemini`, `deepseek`, `ollama`) |\n\
+                           | `/key [api_key]` | Set API key or open authentication modal |\n\
+                           | `/url [endpoint]` | Set custom API base URL |\n\
+                           | `/config` | Display provider connection & credential status |\n\
+                           | `/apply` | Apply selected hardening patch to source code |\n\
+                           | `/rollback` | Rollback previously applied hardening patch |\n\
+                           | `/export` | Export defense audit report to HTML & Markdown |\n\
+                           | `/pause` | Pause / resume selected agent node in workflow |\n\
+                           | `/clear` | Clear chat message history |\n\
+                           | `/help` | Display this command reference |\n\
+                           | `/exit` | Exit constellation defense harness |\n\n\
+                           **Keyboard Shortcuts:**\n\
+                           - `[1]`..`[5]`: Switch tabs (Flow, Findings, Patches, Execution, Skills)\n\
+                           - `[Space]`: Run security audit\n\
+                           - `[a]`: Apply patch │ `[r]`: Rollback patch │ `[p]`: Pause node │ `[e]`: Export report\n\
+                           - `[↑/↓]`: Navigate list / suggestions │ `[Tab]`: Autocomplete command │ `[Esc]`: Clear / Cancel".to_string(),
+                });
+            } else if input == "/model" || input == "model" {
+                self.chat_messages.push(ChatMessage::Agent {
+                    sender: "orchestrator".to_string(),
+                    text: format!(
+                        "### Model Configuration\n- **Active Provider**: {}\n- **Target Model**: `{}`\n\n*Usage:* `/model <model_name>`\n*Examples:*\n- `/model gpt-4o`\n- `/model claude-3-7-sonnet`\n- `/model gemini-2.0-flash`\n- `/model deepseek-chat`\n- `/model qwen2.5-coder:7b`",
+                        self.active_provider.name(),
+                        self.config.get_model()
+                    ),
+                });
+            } else if let Some(model_str) = input.strip_prefix("/model ") {
+                let model = model_str.trim().to_string();
+                self.config.model = Some(model.clone());
+                let _ = self.config.save();
+                self.chat_messages.push(ChatMessage::Agent {
+                    sender: "orchestrator".to_string(),
+                    text: format!(
+                        "✓ Successfully configured model to: `{}` for provider **{}**.",
+                        model,
+                        self.active_provider.name()
+                    ),
+                });
+            } else if input == "/pause" || input == "pause" {
                 self.toggle_pause_selected_node();
             } else if input == "/apply" || input == "apply" || input == "a" {
                 self.apply_current_patch();
@@ -566,18 +694,6 @@ impl App {
                         url
                     ),
                 });
-            } else if let Some(model_str) = input.strip_prefix("/model ") {
-                let model = model_str.trim().to_string();
-                self.config.model = Some(model.clone());
-                let _ = self.config.save();
-                self.chat_messages.push(ChatMessage::Agent {
-                    sender: "orchestrator".to_string(),
-                    text: format!(
-                        "✓ Successfully configured model to: `{}` for provider **{}**.",
-                        model,
-                        self.active_provider.name()
-                    ),
-                });
             } else if input == "/config" || input == "/status" {
                 self.chat_messages.push(ChatMessage::Agent {
                     sender: "orchestrator".to_string(),
@@ -593,7 +709,7 @@ impl App {
                 if !self.config.is_api_key_configured() {
                     self.show_key_modal = true;
                     self.action_msg = Some("authentication required: please set API key.".to_string());
-                    return;
+                    return false;
                 }
                 let hub = SecurityAgentHub::new(self.target_dir.clone(), Arc::new(PolicyGate::default()), self.config.clone());
                 let sender = self.engine_tx.clone();
@@ -607,6 +723,7 @@ impl App {
                 });
             }
         }
+        false
     }
 
     pub fn apply_current_patch(&mut self) {
@@ -751,6 +868,19 @@ impl App {
                 if let Some(btn_send) = sidebar_targets.btn_send {
                     if in_rect(btn_send, col, row) {
                         self.submit_prompt_input();
+                        return;
+                    }
+                }
+
+                // Command autocomplete suggestion click
+                for (cmd_name, cmd_args, row_rect) in &sidebar_targets.suggestion_rows {
+                    if in_rect(*row_rect, col, row) {
+                        self.prompt_input = if cmd_args.is_empty() {
+                            cmd_name.to_string()
+                        } else {
+                            format!("{cmd_name} ")
+                        };
+                        self.suggestion_index = 0;
                         return;
                     }
                 }
@@ -915,6 +1045,7 @@ impl App {
             &self.nodes_info,
             sel_node,
             &self.prompt_input,
+            self.suggestion_index,
             self.awaiting_confirmation,
             &self.expanded_messages,
             !self.patches.is_empty(),

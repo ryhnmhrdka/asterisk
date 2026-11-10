@@ -108,3 +108,62 @@ fn test_app_empty_state_and_auth_modal_gate() {
     assert!(!app.show_key_modal, "Modal must close upon valid key submission");
     assert_eq!(app.config.get_api_key().as_deref(), Some("sk-1"));
 }
+
+#[test]
+fn test_command_suggestions_and_execution() {
+    use constellation::types::{get_matching_commands, ChatMessage};
+    use constellation::ui::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    // 1. Test get_matching_commands helper
+    let all = get_matching_commands("/");
+    assert!(all.len() >= 10);
+    assert!(all.iter().any(|c| c.name == "/model"));
+    assert!(all.iter().any(|c| c.name == "/exit"));
+    assert!(all.iter().any(|c| c.name == "/help"));
+    assert!(all.iter().any(|c| c.name == "/scan"));
+
+    let model_matches = get_matching_commands("/m");
+    assert_eq!(model_matches.len(), 1);
+    assert_eq!(model_matches[0].name, "/model");
+
+    let ex_matches = get_matching_commands("/ex");
+    assert!(ex_matches.iter().any(|c| c.name == "/exit"));
+    assert!(ex_matches.iter().any(|c| c.name == "/export"));
+
+    assert!(get_matching_commands("regular text").is_empty());
+    assert!(get_matching_commands("/model gpt-4o").is_empty());
+
+    // 2. Test Autocomplete via Tab in App
+    let mut app = App::new(PathBuf::from("."), false);
+    app.prompt_input = "/m".to_string();
+
+    // Press Tab to autocomplete /model
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()));
+    assert_eq!(app.prompt_input, "/model ");
+
+    // 3. Test /help command execution
+    app.prompt_input = "/help".to_string();
+    let quit = app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert!(!quit);
+    assert!(!app.chat_messages.is_empty());
+    if let Some(ChatMessage::Agent { text, .. }) = app.chat_messages.last() {
+        assert!(text.contains("Command Reference"));
+        assert!(text.contains("/model"));
+        assert!(text.contains("/exit"));
+    } else {
+        panic!("Expected Agent message with command reference table");
+    }
+
+    // 4. Test /model command execution
+    app.prompt_input = "/model".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    if let Some(ChatMessage::Agent { text, .. }) = app.chat_messages.last() {
+        assert!(text.contains("Model Configuration"));
+    }
+
+    // 5. Test /exit command execution
+    app.prompt_input = "/exit".to_string();
+    let quit = app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert!(quit || app.should_quit, "/exit must signal application termination");
+}

@@ -1,10 +1,10 @@
-use crate::types::{AgentStatus, ChatMessage, SproutedNodeInfo};
+use crate::types::{get_matching_commands, AgentStatus, ChatMessage, SproutedNodeInfo};
 use crate::ui::markdown::parse_markdown;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph},
     Frame,
 };
 use std::collections::HashSet;
@@ -17,6 +17,7 @@ pub struct SidebarClickTargets {
     pub btn_send: Option<Rect>,
     pub subagent_rows: Vec<(String, Rect)>,
     pub user_msg_expand: Vec<(usize, Rect)>,
+    pub suggestion_rows: Vec<(&'static str, &'static str, Rect)>,
 }
 
 pub struct SidebarView;
@@ -30,6 +31,7 @@ impl SidebarView {
         nodes_info: &std::collections::HashMap<String, SproutedNodeInfo>,
         selected_node: Option<&SproutedNodeInfo>,
         prompt_input: &str,
+        selected_suggestion: usize,
         awaiting_confirmation: bool,
         expanded_messages: &HashSet<usize>,
         has_patches: bool,
@@ -53,6 +55,7 @@ impl SidebarView {
             btn_send: None,
             subagent_rows: Vec::new(),
             user_msg_expand: Vec::new(),
+            suggestion_rows: Vec::new(),
         };
 
         // 1. Review Modules Tray
@@ -379,6 +382,58 @@ impl SidebarView {
         f.render_widget(Paragraph::new(send_text).centered().block(send_block), send_rect);
 
         targets.btn_send = Some(send_rect);
+
+        // 6. Command Autocomplete Suggestions Popup
+        let suggestions = get_matching_commands(prompt_input);
+        if !suggestions.is_empty() {
+            let visible_count = suggestions.len().min(6);
+            let popup_height = (visible_count + 2) as u16;
+            let popup_width = input_rect.width + send_rect.width;
+            let popup_y = input_rect.y.saturating_sub(popup_height);
+            let popup_rect = Rect::new(input_rect.x, popup_y, popup_width, popup_height);
+
+            f.render_widget(Clear, popup_rect);
+
+            let popup_block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Plain)
+                .border_style(Style::default().fg(Color::Rgb(80, 80, 85)))
+                .title(Span::styled(" commands [↑/↓ select, Tab complete] ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+
+            let start_idx = if selected_suggestion >= visible_count {
+                selected_suggestion + 1 - visible_count
+            } else {
+                0
+            };
+
+            let mut suggestion_lines = Vec::new();
+            let mut row_y = popup_y + 1;
+
+            for (idx, cmd) in suggestions.iter().enumerate().skip(start_idx).take(visible_count) {
+                let is_selected = idx == selected_suggestion;
+                let item_rect = Rect::new(popup_rect.x + 1, row_y, popup_rect.width.saturating_sub(2), 1);
+                targets.suggestion_rows.push((cmd.name, cmd.args, item_rect));
+                row_y += 1;
+
+                if is_selected {
+                    suggestion_lines.push(Line::from(vec![
+                        Span::styled("> ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
+                        Span::styled(format!("{:<10} ", cmd.name), Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
+                        Span::styled(format!("{:<12} ", cmd.args), Style::default().fg(Color::Rgb(60, 60, 65)).bg(Color::White)),
+                        Span::styled(cmd.description.to_string(), Style::default().fg(Color::Black).bg(Color::White)),
+                    ]));
+                } else {
+                    suggestion_lines.push(Line::from(vec![
+                        Span::styled("  ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(format!("{:<10} ", cmd.name), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                        Span::styled(format!("{:<12} ", cmd.args), Style::default().fg(Color::Rgb(120, 120, 125))),
+                        Span::styled(cmd.description.to_string(), Style::default().fg(Color::Rgb(140, 140, 145))),
+                    ]));
+                }
+            }
+
+            f.render_widget(Paragraph::new(suggestion_lines).block(popup_block), popup_rect);
+        }
 
         targets
     }

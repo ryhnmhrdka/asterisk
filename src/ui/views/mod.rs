@@ -14,4 +14,5 @@ pub use modal_view::{ModalClickTargets, ModalView};
 pub use patch_view::{PatchClickTargets, PatchView};
 pub use sidebar_view::{SidebarClickTargets, SidebarView};
 pub use skills_view::SkillsView;
+#[allow(unused_imports)]
 pub use welcome_view::WelcomeView;

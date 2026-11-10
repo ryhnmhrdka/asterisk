@@ -237,3 +237,107 @@ fn test_provider_model_selector_and_custom_provider_setup_flow() {
     assert!(!app.show_key_modal);
     assert_eq!(app.config.provider, AiProvider::Custom);
 }
+
+#[test]
+fn test_slash_command_isolation_and_tab_click_accuracy() {
+    use constellation::types::ChatMessage;
+    use constellation::ui::app::FocusedPane;
+    use constellation::ui::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut app = App::new(PathBuf::from("."), false);
+    app.config.api_key = Some("test-key".to_string());
+
+    // 1. Typing slash commands must execute without creating user chat bubbles in chat_messages
+    app.prompt_input = "/clear".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.chat_messages.len(), 0, "Slash command /clear must not add user message");
+
+    app.prompt_input = "/model".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert!(app.show_key_modal);
+    assert!(
+        !app.chat_messages.iter().any(|m| matches!(m, ChatMessage::User(u) if u == "/model")),
+        "Slash command /model must not appear in chat messages"
+    );
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+    assert!(!app.show_key_modal);
+
+    // 2. Render frame to populate exact 50/50 split and tab click targets
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| app.render(f)).unwrap();
+
+    let sidebar_rect = app.click_targets.sidebar_rect.expect("Sidebar rect must be set");
+    let workspace_rect = app.click_targets.workspace_rect.expect("Workspace rect must be set");
+
+    // 50/50 split verification
+    assert_eq!(sidebar_rect.width, 60);
+    assert_eq!(workspace_rect.width, 60);
+
+    // 3. Tab click exact boundaries
+    assert_eq!(app.click_targets.tab_rects.len(), 5);
+    let tab0_rect = app.click_targets.tab_rects[0].1;
+    let tab1_rect = app.click_targets.tab_rects[1].1;
+    let tab2_rect = app.click_targets.tab_rects[2].1;
+
+    // Clicking directly on Tab 1 ([2] Findings)
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: tab1_rect.x + 2,
+        row: tab1_rect.y + 1,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert_eq!(app.current_tab, 1, "Clicking exact Tab 1 area must switch to Findings");
+    assert_eq!(app.focused_pane, FocusedPane::Workflow);
+
+    // Clicking directly on Tab 2 ([3] Patches)
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: tab2_rect.x + 2,
+        row: tab2_rect.y + 1,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert_eq!(app.current_tab, 2, "Clicking exact Tab 2 area must switch to Patches");
+
+    // Clicking directly on Tab 0 ([1] Flow)
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: tab0_rect.x + 2,
+        row: tab0_rect.y + 1,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert_eq!(app.current_tab, 0, "Clicking exact Tab 0 area must switch to Flow");
+
+    // 4. Clicking left sidebar switches focus to Chatbot
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: sidebar_rect.x + 10,
+        row: sidebar_rect.y + 10,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert_eq!(app.focused_pane, FocusedPane::Chatbot);
+
+    // 5. Independent scrolling
+    let initial_scroll = app.chat_scroll;
+    // Scroll while over sidebar
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: sidebar_rect.x + 5,
+        row: sidebar_rect.y + 5,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert_eq!(app.chat_scroll, initial_scroll + 1, "Scrolling over sidebar must scroll chat");
+
+    // Scroll while over workflow (Tab 0) does not change chat_scroll
+    let cur_chat_scroll = app.chat_scroll;
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: workspace_rect.x + 5,
+        row: workspace_rect.y + 10,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert_eq!(app.chat_scroll, cur_chat_scroll, "Scrolling over workflow must not alter chat_scroll");
+}

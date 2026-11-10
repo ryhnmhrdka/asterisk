@@ -146,6 +146,7 @@ impl AiProvider {
         }
     }
 
+    #[allow(dead_code)]
     pub fn next(&self) -> Self {
         match self {
             AiProvider::AnthropicClaude => AiProvider::OpenAiGpt4o,

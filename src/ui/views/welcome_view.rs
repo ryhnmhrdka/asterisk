@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::types::AiProvider;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},

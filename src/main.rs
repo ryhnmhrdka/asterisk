@@ -109,17 +109,14 @@ fi
         }
     }
 
-    // 4. Interactive TUI Mode
-    // If no path was explicitly provided in CLI args, start in Welcome mode (ASCII logo + prompt)
-    let start_in_welcome = explicit_target.is_none();
-
+    // 4. Interactive TUI Mode (Directly into Flow & Chatbot Workspace)
     enable_raw_mode()?;
     let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(target_dir, start_in_welcome);
+    let mut app = App::new(target_dir, false);
 
     'main: loop {
         app.update();

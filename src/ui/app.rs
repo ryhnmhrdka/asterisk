@@ -8,7 +8,7 @@ use crate::types::{
 };
 use crate::ui::views::{
     GraphView, LogsView, MatrixView, ModalClickTargets, ModalView, PatchClickTargets, PatchView,
-    SidebarClickTargets, SidebarView, SkillsView, WelcomeView,
+    SidebarClickTargets, SidebarView, SkillsView,
 };
 use chrono::Utc;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -26,6 +26,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use crate::core::{AppConfig, PolicyGate, SecurityAgentHub};
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppMode {
     Welcome,
@@ -41,9 +42,18 @@ pub enum ActiveModal {
     BaseUrlInput,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusedPane {
+    Chatbot,
+    Workflow,
+}
+
 #[derive(Default)]
 pub struct AppClickTargets {
+    #[allow(dead_code)]
     pub welcome_btn: Option<Rect>,
+    pub sidebar_rect: Option<Rect>,
+    pub workspace_rect: Option<Rect>,
     pub tab_rects: Vec<(usize, Rect)>,
     pub sidebar: Option<SidebarClickTargets>,
     pub findings_table: Option<Rect>,
@@ -52,9 +62,12 @@ pub struct AppClickTargets {
 }
 
 pub struct App {
+    #[allow(dead_code)]
     pub mode: AppMode,
+    pub focused_pane: FocusedPane,
     pub current_tab: usize,
     pub target_dir: PathBuf,
+    #[allow(dead_code)]
     pub welcome_input: String,
     pub prompt_input: String,
 
@@ -100,7 +113,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(initial_target: PathBuf, start_in_welcome: bool) -> Self {
+    pub fn new(initial_target: PathBuf, _start_in_welcome: bool) -> Self {
         let (tx, rx) = unbounded_channel();
         let (cmd_tx, cmd_rx) = unbounded_channel();
 
@@ -112,7 +125,8 @@ impl App {
         let active_provider = config.provider;
 
         Self {
-            mode: if start_in_welcome { AppMode::Welcome } else { AppMode::Workspace },
+            mode: AppMode::Workspace,
+            focused_pane: FocusedPane::Chatbot,
             current_tab: 0,
             target_dir: initial_target,
             welcome_input: String::new(),
@@ -379,10 +393,7 @@ impl App {
             return self.handle_modal_key(key);
         }
 
-        let res = match self.mode {
-            AppMode::Welcome => self.handle_welcome_key(key),
-            AppMode::Workspace => self.handle_workspace_key(key),
-        };
+        let res = self.handle_workspace_key(key);
         res || self.should_quit
     }
 
@@ -606,56 +617,6 @@ impl App {
         }
     }
 
-    fn handle_welcome_key(&mut self, key: KeyEvent) -> bool {
-        match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => true,
-            KeyCode::Tab => {
-                self.active_provider = self.active_provider.next();
-                self.config.provider = self.active_provider;
-                let _ = self.config.save();
-                false
-            }
-            KeyCode::Enter => {
-                if !self.config.is_api_key_configured() {
-                    self.open_config_modal(2);
-                    self.action_msg = Some("authentication required: please set API key to proceed.".to_string());
-                    return false;
-                }
-
-                let input = self.welcome_input.trim().to_string();
-                if !input.is_empty() {
-                    if std::path::Path::new(&input).exists() {
-                        self.target_dir = PathBuf::from(&input);
-                    } else {
-                        self.chat_messages.push(ChatMessage::User(input.clone()));
-                        let hub = SecurityAgentHub::new(self.target_dir.clone(), Arc::new(PolicyGate::default()), self.config.clone());
-                        let sender = self.engine_tx.clone();
-                        tokio::spawn(async move {
-                            let reply = hub.query(&input).await;
-                            let _ = sender.send(EngineMessage::Chat(ChatMessage::Agent {
-                                sender: "orchestrator".to_string(),
-                                text: reply,
-                            }));
-                        });
-                    }
-                }
-                self.profile = WorkspaceScanner::scan(&self.target_dir);
-                self.mode = AppMode::Workspace;
-                false
-            }
-            KeyCode::Backspace => {
-                self.welcome_input.pop();
-                false
-            }
-            KeyCode::Char(c) => {
-                self.welcome_input.push(c);
-                false
-            }
-            _ => false,
-        }
-    }
-
     fn handle_workspace_key(&mut self, key: KeyEvent) -> bool {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return true;
@@ -824,8 +785,6 @@ impl App {
         }
 
         if !input.is_empty() {
-            self.chat_messages.push(ChatMessage::User(input.clone()));
-
             if input == "/exit" || input == "/quit" || input == "exit" || input == "quit" {
                 self.should_quit = true;
                 return true;
@@ -927,6 +886,7 @@ impl App {
                     self.action_msg = Some("authentication required: please set API key.".to_string());
                     return false;
                 }
+                self.chat_messages.push(ChatMessage::User(input.clone()));
                 let hub = SecurityAgentHub::new(self.target_dir.clone(), Arc::new(PolicyGate::default()), self.config.clone());
                 let sender = self.engine_tx.clone();
                 let prompt_text = input.clone();
@@ -1043,62 +1003,74 @@ impl App {
             return;
         }
 
-        // Scroll handlers (inspired by SynapsCLI's mouse wheel scrolling)
+        // Determine which pane is under cursor
+        let is_over_sidebar = self.click_targets.sidebar_rect.map_or(
+            self.focused_pane == FocusedPane::Chatbot,
+            |r| in_rect(r, col, row),
+        );
+
+        // Scroll handlers: independent scrolling for Chatbot and Workflow
         if matches!(mouse.kind, MouseEventKind::ScrollUp) {
-            if self.chat_scroll < self.chat_messages.len().saturating_sub(2) {
+            if is_over_sidebar {
                 self.chat_scroll += 1;
+            } else {
+                if self.current_tab == 0 {
+                    for event in self.flow.handle_mouse_event(mouse).into_events() {
+                        if let FlowEvent::NodeClicked { node_id } = event {
+                            self.selected_node_id = Some(node_id.clone());
+                            self.action_msg = Some(format!("selected node {node_id}"));
+                        }
+                    }
+                } else if self.current_tab == 1 && self.selected_matrix_row > 0 {
+                    self.selected_matrix_row -= 1;
+                } else if self.current_tab == 2 && self.selected_patch_row > 0 {
+                    self.selected_patch_row -= 1;
+                }
             }
             return;
         }
         if matches!(mouse.kind, MouseEventKind::ScrollDown) {
-            if self.chat_scroll > 0 {
-                self.chat_scroll -= 1;
-            }
-            return;
-        }
-
-        // 1. Welcome Screen Clicks
-        if self.mode == AppMode::Welcome {
-            if is_left_click {
-                if let Some(btn) = self.click_targets.welcome_btn {
-                    if in_rect(btn, col, row) {
-                        if !self.config.is_api_key_configured() {
-                            self.open_config_modal(2);
-                            self.action_msg = Some("authentication required: please set API key.".to_string());
-                            return;
+            if is_over_sidebar {
+                self.chat_scroll = self.chat_scroll.saturating_sub(1);
+            } else {
+                if self.current_tab == 0 {
+                    for event in self.flow.handle_mouse_event(mouse).into_events() {
+                        if let FlowEvent::NodeClicked { node_id } = event {
+                            self.selected_node_id = Some(node_id.clone());
+                            self.action_msg = Some(format!("selected node {node_id}"));
                         }
-
-                        let input = self.welcome_input.trim().to_string();
-                        if !input.is_empty() {
-                            if std::path::Path::new(&input).exists() {
-                                self.target_dir = PathBuf::from(&input);
-                            } else {
-                                self.chat_messages.push(ChatMessage::User(input.clone()));
-                                let hub = SecurityAgentHub::new(self.target_dir.clone(), Arc::new(PolicyGate::default()), self.config.clone());
-                                let sender = self.engine_tx.clone();
-                                tokio::spawn(async move {
-                                    let reply = hub.query(&input).await;
-                                    let _ = sender.send(EngineMessage::Chat(ChatMessage::Agent {
-                                        sender: "orchestrator".to_string(),
-                                        text: reply,
-                                    }));
-                                });
-                            }
-                        }
-                        self.profile = WorkspaceScanner::scan(&self.target_dir);
-                        self.mode = AppMode::Workspace;
+                    }
+                } else if self.current_tab == 1 {
+                    if self.selected_matrix_row + 1 < self.findings.len() {
+                        self.selected_matrix_row += 1;
+                    }
+                } else if self.current_tab == 2 {
+                    if self.selected_patch_row + 1 < self.patches.len() {
+                        self.selected_patch_row += 1;
                     }
                 }
             }
             return;
         }
 
-        // 2. Workspace Screen Clicks
+        // Workspace Screen Clicks
         if is_left_click {
+            if let Some(r) = self.click_targets.sidebar_rect {
+                if in_rect(r, col, row) {
+                    self.focused_pane = FocusedPane::Chatbot;
+                }
+            }
+            if let Some(r) = self.click_targets.workspace_rect {
+                if in_rect(r, col, row) {
+                    self.focused_pane = FocusedPane::Workflow;
+                }
+            }
+
             // A. Tab clicks
             for (tab_idx, rect) in &self.click_targets.tab_rects {
                 if in_rect(*rect, col, row) {
                     self.current_tab = *tab_idx;
+                    self.focused_pane = FocusedPane::Workflow;
                     return;
                 }
             }
@@ -1226,21 +1198,7 @@ impl App {
 
     pub fn render(&mut self, f: &mut Frame) {
         let area = f.area();
-        match self.mode {
-            AppMode::Welcome => {
-                let targets = WelcomeView::render(
-                    f,
-                    area,
-                    &self.welcome_input,
-                    &self.target_dir.display().to_string(),
-                    self.active_provider,
-                );
-                self.click_targets.welcome_btn = Some(targets.prompt_box);
-            }
-            AppMode::Workspace => {
-                self.render_workspace(f, area);
-            }
-        }
+        self.render_workspace(f, area);
 
         if self.show_key_modal {
             let modal_targets = match self.active_modal {
@@ -1346,14 +1304,17 @@ impl App {
         ]);
         f.render_widget(Paragraph::new(top_header), root_chunks[0]);
 
-        // Main Horizontal Split: Left Sidebar Chatbot (36%) vs Right Workspace Area (64%)
+        // Main Horizontal Split: 50% Left Chatbot vs 50% Right Workspace Area
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(36),
-                Constraint::Percentage(64),
+                Constraint::Percentage(50),
+                Constraint::Percentage(50),
             ])
             .split(root_chunks[1]);
+
+        self.click_targets.sidebar_rect = Some(main_chunks[0]);
+        self.click_targets.workspace_rect = Some(main_chunks[1]);
 
         // Left Sidebar Chatbot
         let sel_node = self.selected_node_id.as_ref().and_then(|id| self.nodes_info.get(id));
@@ -1372,46 +1333,52 @@ impl App {
         );
         self.click_targets.sidebar = Some(sidebar_targets);
 
-        // Right Workspace Area: Tab Strip + Viewport
+        // Right Workspace Area: Tab Strip + Viewport with top & bottom margins
         let right_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),
-                Constraint::Min(6),
+                Constraint::Length(1), // Top margin / breathing room
+                Constraint::Length(1), // Tab Bar row
+                Constraint::Length(1), // Bottom margin / subtle separator
+                Constraint::Min(6),    // Viewport
             ])
             .split(main_chunks[1]);
 
         // Modern Tab Bar surface
-        let tab_bar_area = right_chunks[0];
+        let tab_bar_area = right_chunks[1];
         f.render_widget(Block::default().style(Style::default().bg(Color::Rgb(14, 15, 19))), tab_bar_area);
-
-        let tab_width = tab_bar_area.width / 5;
-        let mut tab_rects = Vec::new();
-        for i in 0..5 {
-            tab_rects.push((
-                i,
-                Rect::new(tab_bar_area.x + i as u16 * tab_width, tab_bar_area.y, tab_width, tab_bar_area.height),
-            ));
-        }
-        self.click_targets.tab_rects = tab_rects;
 
         let findings_count = self.findings.len();
         let patches_count = self.patches.len();
-        let titles = vec![
+        let titles = [
             format!("  [1] Flow  "),
             format!("  [2] Findings ({findings_count})  "),
             format!("  [3] Patches ({patches_count})  "),
             format!("  [4] Execution  "),
             format!("  [5] Skills  "),
         ];
-        let tabs = Tabs::new(titles)
+
+        let mut tab_rects = Vec::new();
+        let mut curr_x = tab_bar_area.x;
+        for (i, title) in titles.iter().enumerate() {
+            let width = title.chars().count() as u16;
+            // Covers tab text and generous click boundary (including row above and below)
+            tab_rects.push((
+                i,
+                Rect::new(curr_x, right_chunks[0].y, width, 3),
+            ));
+            curr_x += width + 1; // +1 for the divider
+        }
+        self.click_targets.tab_rects = tab_rects;
+
+        let tabs = Tabs::new(titles.to_vec())
             .select(self.current_tab)
             .style(Style::default().fg(Color::Rgb(130, 132, 142)).bg(Color::Rgb(14, 15, 19)))
             .highlight_style(Style::default().fg(Color::White).bg(Color::Rgb(36, 38, 48)).add_modifier(Modifier::BOLD))
             .divider(Span::styled(" ", Style::default().bg(Color::Rgb(14, 15, 19))));
-        f.render_widget(tabs, right_chunks[0]);
+        f.render_widget(tabs, tab_bar_area);
 
-        let content_area = right_chunks[1];
+        let content_area = right_chunks[3];
         match self.current_tab {
             0 => GraphView::render(f, content_area, &mut self.flow, self.nodes_info.is_empty()),
             1 => {

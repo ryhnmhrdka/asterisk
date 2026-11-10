@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
 use std::collections::HashSet;
@@ -43,7 +43,7 @@ impl SidebarView {
                 Constraint::Min(8),                                                  // 2. Chatbot Message Stream
                 Constraint::Length(if awaiting_confirmation { 3 } else { 0 }),       // 3. Confirmation Buttons
                 Constraint::Length(4),                                               // 4. Module Inspector Box
-                Constraint::Length(1),                                               // 5. Input Prompt Row
+                Constraint::Length(3),                                               // 5. Input Prompt Row (with bottom margin)
             ])
             .split(area);
 
@@ -133,121 +133,143 @@ impl SidebarView {
         let chat_block = Block::default()
             .style(Style::default().bg(Color::Rgb(16, 17, 21)));
 
-        let mut chat_lines = Vec::new();
-        let total_msgs = chat_messages.len();
-        let start_idx = total_msgs.saturating_sub(14 + chat_scroll);
-        let end_idx = total_msgs.saturating_sub(chat_scroll);
-
         let max_text_width = (chunks[1].width.saturating_sub(4)) as usize;
+        let mut all_chat_lines: Vec<(Line, Option<usize>)> = Vec::new();
 
-        for (msg_idx, msg) in chat_messages[start_idx..end_idx].iter().enumerate() {
-            let actual_idx = start_idx + msg_idx;
+        for (actual_idx, msg) in chat_messages.iter().enumerate() {
             match msg {
                 ChatMessage::User(text) => {
-                    // Full-width solid gray background (mentok ke kiri dan kanan, no border collision)
-                    let bg_color = Color::Rgb(26, 28, 34);
-                    let user_style = Style::default().bg(bg_color);
+                    let user_style = Style::default().bg(Color::Rgb(26, 28, 34));
 
-                    chat_lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("{:<width$}", "  You:", width = chunks[1].width as usize),
-                            user_style.fg(Color::Rgb(150, 185, 255)).add_modifier(Modifier::BOLD),
-                        ),
-                    ]));
+                    all_chat_lines.push((
+                        Line::from(vec![
+                            Span::styled("  You:", user_style.fg(Color::Rgb(150, 185, 255)).add_modifier(Modifier::BOLD)),
+                        ]),
+                        None,
+                    ));
 
                     let wrapped = wrap_multiline(text, max_text_width);
                     let is_expanded = expanded_messages.contains(&actual_idx);
 
                     if wrapped.len() <= 3 || is_expanded {
                         for l in &wrapped {
-                            chat_lines.push(Line::from(vec![
-                                Span::styled(
-                                    format!("{:<width$}", format!("  {l}"), width = chunks[1].width as usize),
-                                    user_style.fg(Color::White),
-                                ),
-                            ]));
+                            all_chat_lines.push((
+                                Line::from(vec![
+                                    Span::styled(format!("  {l}"), user_style.fg(Color::White)),
+                                ]),
+                                None,
+                            ));
                         }
                         if is_expanded && wrapped.len() > 3 {
-                            chat_lines.push(Line::from(vec![
-                                Span::styled(
-                                    format!("{:<width$}", "  ▲ [collapse]", width = chunks[1].width as usize),
-                                    user_style.fg(Color::Rgb(110, 160, 255)).add_modifier(Modifier::BOLD),
-                                ),
-                            ]));
+                            all_chat_lines.push((
+                                Line::from(vec![
+                                    Span::styled("  ▲ [collapse]", user_style.fg(Color::Rgb(110, 160, 255)).add_modifier(Modifier::BOLD)),
+                                ]),
+                                Some(actual_idx),
+                            ));
                         }
                     } else {
-                        // Truncated with ... [click to expand]
                         for l in &wrapped[..2] {
-                            chat_lines.push(Line::from(vec![
-                                Span::styled(
-                                    format!("{:<width$}", format!("  {l}"), width = chunks[1].width as usize),
-                                    user_style.fg(Color::White),
-                                ),
-                            ]));
+                            all_chat_lines.push((
+                                Line::from(vec![
+                                    Span::styled(format!("  {l}"), user_style.fg(Color::White)),
+                                ]),
+                                None,
+                            ));
                         }
                         let last_line = format!("  {} ... [click to expand]", &wrapped[2]);
-                        chat_lines.push(Line::from(vec![
-                            Span::styled(
-                                format!("{:<width$}", last_line, width = chunks[1].width as usize),
-                                user_style.fg(Color::Rgb(120, 175, 255)).add_modifier(Modifier::BOLD),
-                            ),
-                        ]));
+                        all_chat_lines.push((
+                            Line::from(vec![
+                                Span::styled(last_line, user_style.fg(Color::Rgb(120, 175, 255)).add_modifier(Modifier::BOLD)),
+                            ]),
+                            Some(actual_idx),
+                        ));
                     }
-
-                    // Bottom padding of full-width band
-                    chat_lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("{:<width$}", "", width = chunks[1].width as usize),
-                            user_style,
-                        ),
-                    ]));
                 }
                 ChatMessage::Thinking { agent, thought } => {
-                    chat_lines.push(Line::from(vec![
-                        Span::styled("  ⠋ ", Style::default().fg(Color::Rgb(120, 122, 132))),
-                        Span::styled(format!("[{agent}]: "), Style::default().fg(Color::Rgb(130, 132, 142))),
-                        Span::styled(thought, Style::default().fg(Color::Rgb(160, 162, 172)).add_modifier(Modifier::ITALIC)),
-                    ]));
+                    all_chat_lines.push((
+                        Line::from(vec![
+                            Span::styled("  ⠋ ", Style::default().fg(Color::Rgb(120, 122, 132))),
+                            Span::styled(format!("[{agent}]: "), Style::default().fg(Color::Rgb(130, 132, 142))),
+                            Span::styled(thought, Style::default().fg(Color::Rgb(160, 162, 172)).add_modifier(Modifier::ITALIC)),
+                        ]),
+                        None,
+                    ));
                 }
                 ChatMessage::ToolCall { tool, input, .. } => {
-                    chat_lines.push(Line::from(vec![
-                        Span::styled("  ❯ task: ", Style::default().fg(Color::Rgb(120, 122, 132))),
-                        Span::styled(format!("{tool} "), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                        Span::styled(format!("({input})"), Style::default().fg(Color::Rgb(130, 132, 142))),
-                    ]));
+                    all_chat_lines.push((
+                        Line::from(vec![
+                            Span::styled("  ❯ task: ", Style::default().fg(Color::Rgb(120, 122, 132))),
+                            Span::styled(format!("{tool} "), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                            Span::styled(format!("({input})"), Style::default().fg(Color::Rgb(130, 132, 142))),
+                        ]),
+                        None,
+                    ));
                 }
                 ChatMessage::ToolResult { output, elapsed_ms, .. } => {
                     let ms_str = elapsed_ms.map(|ms| format!(" ({ms}ms)")).unwrap_or_default();
-                    chat_lines.push(Line::from(vec![
-                        Span::styled("    ✔ result: ", Style::default().fg(Color::Rgb(120, 195, 130))),
-                        Span::styled(output, Style::default().fg(Color::Rgb(210, 212, 220))),
-                        Span::styled(ms_str, Style::default().fg(Color::Rgb(110, 112, 120))),
-                    ]));
+                    all_chat_lines.push((
+                        Line::from(vec![
+                            Span::styled("    ✔ result: ", Style::default().fg(Color::Rgb(120, 195, 130))),
+                            Span::styled(output, Style::default().fg(Color::Rgb(210, 212, 220))),
+                            Span::styled(ms_str, Style::default().fg(Color::Rgb(110, 112, 120))),
+                        ]),
+                        None,
+                    ));
                 }
                 ChatMessage::Agent { sender, text } => {
-                    // Orchestrator has NO BOX - clean streaming markdown & latex
-                    chat_lines.push(Line::from(vec![
-                        Span::styled(format!("  ● {sender}:"), Style::default().fg(Color::Rgb(100, 165, 255)).add_modifier(Modifier::BOLD)),
-                    ]));
+                    all_chat_lines.push((
+                        Line::from(vec![
+                            Span::styled(format!("  ● {sender}:"), Style::default().fg(Color::Rgb(100, 165, 255)).add_modifier(Modifier::BOLD)),
+                        ]),
+                        None,
+                    ));
 
                     let parsed = parse_markdown(text);
                     for pl in parsed {
                         let mut spans = vec![Span::raw("    ")];
                         spans.extend(pl.spans);
-                        chat_lines.push(Line::from(spans));
+                        all_chat_lines.push((Line::from(spans), None));
                     }
                 }
                 ChatMessage::System(text) => {
-                    chat_lines.push(Line::from(vec![
-                        Span::styled("  ● system: ", Style::default().fg(Color::Rgb(110, 112, 122))),
-                        Span::styled(text, Style::default().fg(Color::Rgb(200, 202, 210))),
-                    ]));
+                    all_chat_lines.push((
+                        Line::from(vec![
+                            Span::styled("  ● system: ", Style::default().fg(Color::Rgb(110, 112, 122))),
+                            Span::styled(text, Style::default().fg(Color::Rgb(200, 202, 210))),
+                        ]),
+                        None,
+                    ));
                 }
             }
-            chat_lines.push(Line::raw(""));
+            all_chat_lines.push((Line::raw(""), None));
         }
 
-        f.render_widget(Paragraph::new(chat_lines).block(chat_block), chunks[1]);
+        let visible_height = chunks[1].height as usize;
+        let total_lines = all_chat_lines.len();
+        let max_scroll = total_lines.saturating_sub(visible_height);
+        let effective_scroll = chat_scroll.min(max_scroll);
+
+        let start_line = max_scroll.saturating_sub(effective_scroll);
+        let end_line = (start_line + visible_height).min(total_lines);
+
+        let mut visible_lines = Vec::new();
+        if total_lines > 0 && start_line < total_lines {
+            for (idx, (line, expand_msg_idx)) in all_chat_lines[start_line..end_line].iter().enumerate() {
+                visible_lines.push(line.clone());
+                if let Some(msg_idx) = expand_msg_idx {
+                    let click_y = chunks[1].y + idx as u16;
+                    targets.user_msg_expand.push((*msg_idx, Rect::new(chunks[1].x, click_y, chunks[1].width, 1)));
+                }
+            }
+        }
+
+        f.render_widget(
+            Paragraph::new(visible_lines)
+                .wrap(Wrap { trim: false })
+                .block(chat_block),
+            chunks[1],
+        );
 
         // 3. Clickable Confirmation Buttons
         if awaiting_confirmation {
@@ -344,7 +366,15 @@ impl SidebarView {
         targets.btn_apply = apply_rect;
 
         // 5. Interactive Chatbot Input Bar with Clickable [ Send ↵ ] Button
-        let prompt_row = chunks[4];
+        let prompt_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // 1. Input Box & Send button
+                Constraint::Length(1), // 2. Clean hotkey hint line
+                Constraint::Length(1), // 3. Bottom breathing margin
+            ])
+            .split(chunks[4]);
+
         let input_split = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -352,7 +382,7 @@ impl SidebarView {
                 Constraint::Length(1), // Quiet spacer
                 Constraint::Length(10), // Send button
             ])
-            .split(prompt_row);
+            .split(prompt_chunks[0]);
 
         let input_rect = input_split[0];
         let send_rect = input_split[2];
@@ -389,6 +419,19 @@ impl SidebarView {
         f.render_widget(Paragraph::new(send_text).centered().block(send_block), send_rect);
 
         targets.btn_send = Some(send_rect);
+
+        // Subtitle hint row beneath input box (so it has comfortable bottom breathing space)
+        let hint_line = Line::from(vec![
+            Span::raw("  "),
+            Span::styled("type ", Style::default().fg(Color::Rgb(85, 87, 95))),
+            Span::styled("/", Style::default().fg(Color::Rgb(140, 180, 255))),
+            Span::styled(" for commands  •  ", Style::default().fg(Color::Rgb(85, 87, 95))),
+            Span::styled("[Tab]", Style::default().fg(Color::Rgb(140, 142, 150))),
+            Span::styled(" complete  •  ", Style::default().fg(Color::Rgb(85, 87, 95))),
+            Span::styled("[↵]", Style::default().fg(Color::Rgb(140, 142, 150))),
+            Span::styled(" send", Style::default().fg(Color::Rgb(85, 87, 95))),
+        ]);
+        f.render_widget(Paragraph::new(hint_line), prompt_chunks[1]);
 
         // 6. Command Autocomplete Suggestions Popup
         let suggestions = get_matching_commands(prompt_input);
@@ -455,7 +498,20 @@ fn wrap_multiline(text: &str, max_width: usize) -> Vec<String> {
     for paragraph in text.lines() {
         let mut current = String::new();
         for word in paragraph.split_whitespace() {
-            if current.is_empty() {
+            if word.len() > max_width {
+                if !current.is_empty() {
+                    result.push(current);
+                    current = String::new();
+                }
+                let mut rem = word;
+                while rem.len() > max_width {
+                    result.push(rem[..max_width].to_string());
+                    rem = &rem[max_width..];
+                }
+                if !rem.is_empty() {
+                    current = rem.to_string();
+                }
+            } else if current.is_empty() {
                 current.push_str(word);
             } else if current.len() + 1 + word.len() <= max_width {
                 current.push(' ');

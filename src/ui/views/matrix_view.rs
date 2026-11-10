@@ -108,11 +108,11 @@ impl MatrixView {
                 ]),
                 Line::from(vec![
                     Span::styled("click:       ", Style::default().fg(Color::DarkGray)),
-                    Span::styled("click any row to inspect  │  switch to tab 3 to review diff  │  [a] apply patch", Style::default().fg(Color::DarkGray)),
+                    Span::styled("click any row to inspect  │  switch to tab [3] to review diff  │  [a] apply patch", Style::default().fg(Color::DarkGray)),
                 ]),
             ]
         } else {
-            vec![Line::from(Span::styled("no vulnerability selected.", Style::default().fg(Color::DarkGray)))]
+            vec![Line::from(Span::styled("no vulnerabilities identified │ workspace clean or press [space] to run defense audit.", Style::default().fg(Color::DarkGray)))]
         };
 
         f.render_widget(Paragraph::new(detail_content).block(detail_block), chunks[1]);

@@ -169,7 +169,7 @@ impl PatchView {
             }
             lines
         } else {
-            vec![Line::from(Span::styled("select a patch from the left panel.", Style::default().fg(Color::DarkGray)))]
+            vec![Line::from(Span::styled("no remediation patches available │ workspace clean or run defense audit.", Style::default().fg(Color::DarkGray)))]
         };
 
         f.render_widget(Paragraph::new(diff_lines).block(diff_block), right_chunks[1]);
@@ -188,7 +188,7 @@ impl PatchView {
             }
             lines
         } else {
-            vec![Line::from(Span::styled("no test harness available.", Style::default().fg(Color::DarkGray)))]
+            vec![Line::from(Span::styled("no remediation test harness │ workspace clean or run defense audit.", Style::default().fg(Color::DarkGray)))]
         };
 
         f.render_widget(Paragraph::new(test_lines).block(test_block), right_chunks[2]);

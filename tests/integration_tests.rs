@@ -77,10 +77,12 @@ fn test_app_empty_state_and_auth_modal_gate() {
     use constellation::ui::App;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    // App must start with 0 findings, 0 patches, empty plan (no dummy data)
+    // App must start with 0 findings, 0 patches, empty plan, empty graph (no dummy data)
     let mut app = App::new(PathBuf::from("."), true);
     assert_eq!(app.findings.len(), 0);
     assert_eq!(app.patches.len(), 0);
+    assert!(app.nodes_info.is_empty(), "Flow nodes must be empty before audit is initiated");
+    assert!(app.selected_node_id.is_none());
     assert!(app.plan.is_none());
     assert!(!app.is_running);
     assert!(!app.show_key_modal);

@@ -87,8 +87,8 @@ impl App {
         let (cmd_tx, cmd_rx) = unbounded_channel();
 
         let profile = WorkspaceScanner::scan(&initial_target);
-        let nodes_info = AgentGraphBuilder::build_nodes_for_workspace(&initial_target);
-        let flow = AgentGraphBuilder::build_sprouted_graph(&nodes_info).unwrap_or_else(|_| Flow::new());
+        let nodes_info = std::collections::HashMap::new();
+        let flow = Flow::new();
         let skills = SkillRegistry::new();
         let config = AppConfig::load();
         let active_provider = config.provider;
@@ -101,7 +101,7 @@ impl App {
             prompt_input: String::new(),
             flow,
             nodes_info,
-            selected_node_id: Some("orch".to_string()),
+            selected_node_id: None,
             profile,
             plan: None,
             findings: Vec::new(),
@@ -143,6 +143,13 @@ impl App {
         self.is_running = true;
         self.awaiting_confirmation = false;
         self.action_msg = Some("scanning workspace...".to_string());
+
+        // Construct dynamic workflow graph for target
+        self.nodes_info = AgentGraphBuilder::build_nodes_for_workspace(&self.target_dir);
+        if let Ok(flow) = AgentGraphBuilder::build_sprouted_graph(&self.nodes_info) {
+            self.flow = flow;
+        }
+        self.selected_node_id = Some("orch".to_string());
 
         let target = self.target_dir.clone();
         let sender = self.engine_tx.clone();
@@ -365,8 +372,6 @@ impl App {
                     }
                 }
                 self.profile = WorkspaceScanner::scan(&self.target_dir);
-                self.nodes_info = AgentGraphBuilder::build_nodes_for_workspace(&self.target_dir);
-                self.flow = AgentGraphBuilder::build_sprouted_graph(&self.nodes_info).unwrap_or_else(|_| Flow::new());
                 self.mode = AppMode::Workspace;
                 false
             }
@@ -403,6 +408,9 @@ impl App {
             KeyCode::F(3) => self.current_tab = 2,
             KeyCode::F(4) => self.current_tab = 3,
             KeyCode::F(5) => self.current_tab = 4,
+            KeyCode::Char(c @ '1'..='5') if self.prompt_input.is_empty() => {
+                self.current_tab = (c as usize) - ('1' as usize);
+            }
 
             KeyCode::Enter => {
                 self.submit_prompt_input();
@@ -697,8 +705,6 @@ impl App {
                             }
                         }
                         self.profile = WorkspaceScanner::scan(&self.target_dir);
-                        self.nodes_info = AgentGraphBuilder::build_nodes_for_workspace(&self.target_dir);
-                        self.flow = AgentGraphBuilder::build_sprouted_graph(&self.nodes_info).unwrap_or_else(|_| Flow::new());
                         self.mode = AppMode::Workspace;
                     }
                 }
@@ -936,12 +942,14 @@ impl App {
         }
         self.click_targets.tab_rects = tab_rects;
 
+        let findings_count = self.findings.len();
+        let patches_count = self.patches.len();
         let titles = vec![
-            " 1 flow graph ",
-            " 2 findings ",
-            " 3 patches ",
-            " 4 execution ",
-            " 5 skills ",
+            format!(" [1] Flow "),
+            format!(" [2] Findings ({findings_count}) "),
+            format!(" [3] Patches ({patches_count}) "),
+            format!(" [4] Execution "),
+            format!(" [5] Skills "),
         ];
         let tabs = Tabs::new(titles)
             .select(self.current_tab)
@@ -952,7 +960,7 @@ impl App {
 
         let content_area = right_chunks[1];
         match self.current_tab {
-            0 => GraphView::render(f, content_area, &mut self.flow),
+            0 => GraphView::render(f, content_area, &mut self.flow, self.nodes_info.is_empty()),
             1 => {
                 let table_rect = MatrixView::render(f, content_area, &self.findings, self.selected_matrix_row);
                 self.click_targets.findings_table = Some(table_rect);

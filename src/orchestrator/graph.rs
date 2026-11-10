@@ -178,6 +178,7 @@ impl AgentGraphBuilder {
         map
     }
 
+    #[allow(dead_code)]
     pub fn default_nodes_map() -> HashMap<String, SproutedNodeInfo> {
         Self::build_nodes_for_workspace(Path::new("."))
     }

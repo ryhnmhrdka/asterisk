@@ -1,7 +1,9 @@
 use crate::types::HardeningPatch;
 
+#[allow(dead_code)]
 pub struct VerificationAgent;
 
+#[allow(dead_code)]
 impl VerificationAgent {
     pub fn synthesize_test_suite(patches: &[HardeningPatch]) -> String {
         let mut suite = String::new();

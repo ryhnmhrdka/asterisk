@@ -150,6 +150,7 @@ impl AiProvider {
 }
 
 /// Rich Chat Message model
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum ChatMessage {
     User(String),
@@ -175,6 +176,7 @@ pub enum ChatMessage {
     System(String),
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SproutedNodeInfo {
     pub id: String,

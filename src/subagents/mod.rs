@@ -8,5 +8,6 @@ pub use network::NetworkProberAgent;
 pub use patcher::AutoHardeningAgent;
 pub use sast::SastAnalyzerAgent;
 pub use secrets::SecretHunterAgent;
+#[allow(unused_imports)]
 pub use verifier::VerificationAgent;
 

@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 pub struct SecurityAgentHub {
     pub target_dir: PathBuf,
+    #[allow(dead_code)]
     pub policy_gate: Arc<PolicyGate>,
     pub config: AppConfig,
 }

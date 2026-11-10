@@ -3,6 +3,7 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeKind {
     Source,             // Untrusted user input / HTTP endpoint / CLI arg
@@ -12,6 +13,7 @@ pub enum NodeKind {
     ExternalDependency, // Library / third-party package
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct CodeNode {
     pub id: String,
@@ -21,6 +23,7 @@ pub struct CodeNode {
     pub line_number: usize,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EdgeKind {
     Calls,

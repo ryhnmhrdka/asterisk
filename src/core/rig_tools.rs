@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::core::{
     git_secrets::GitHistorySecretMiner,
     graph::{CodeContextGraph, ReachabilityVerdict},

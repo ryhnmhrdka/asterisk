@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum EngineMessage {
     NodeStatusChanged { id: String, status: AgentStatus },
@@ -27,6 +28,7 @@ pub enum EngineMessage {
     ScanFinished,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum EngineCommand {
     ConfirmDeploy,

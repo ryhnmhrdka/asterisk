@@ -1,5 +1,6 @@
 use crate::types::WorkspaceProfile;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct DefensePlan {
     pub strategy_name: String,
@@ -8,6 +9,7 @@ pub struct DefensePlan {
     pub phases: Vec<PlanPhase>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct PlanPhase {
     pub id: String,

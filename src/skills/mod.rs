@@ -65,6 +65,7 @@ impl SkillRegistry {
         Self { skills }
     }
 
+    #[allow(dead_code)]
     pub fn record_invocation(&mut self, skill_id: &str) {
         if let Some(skill) = self.skills.iter_mut().find(|s| s.id == skill_id) {
             skill.invocations += 1;

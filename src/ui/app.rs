@@ -1066,7 +1066,7 @@ impl App {
         let root_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(2),
+                Constraint::Length(1),
                 Constraint::Min(8),
                 Constraint::Length(1),
             ])
@@ -1096,13 +1096,13 @@ impl App {
             Span::styled(" constellation ", Style::default().fg(Color::White).bg(Color::Rgb(28, 29, 36)).add_modifier(Modifier::BOLD)),
             Span::raw("  "),
             Span::styled(format!(" {} ", self.target_dir.display()), Style::default().fg(Color::Rgb(170, 172, 180)).bg(Color::Rgb(24, 25, 31))),
-            Span::raw(" "),
+            Span::raw("  "),
             Span::styled(format!(" {} files ", self.profile.total_files), Style::default().fg(Color::Rgb(150, 152, 160)).bg(Color::Rgb(24, 25, 31))),
-            Span::raw(" "),
+            Span::raw("  "),
             findings_pill,
-            Span::raw(" "),
+            Span::raw("  "),
             Span::styled(format!(" {} patches ", self.patches.len()), Style::default().fg(Color::Rgb(150, 152, 160)).bg(Color::Rgb(24, 25, 31))),
-            Span::raw(" "),
+            Span::raw("  "),
             Span::styled(format!(" {} ", self.active_provider.name()), Style::default().fg(Color::Rgb(160, 200, 255)).bg(Color::Rgb(22, 28, 40))),
             Span::raw("   "),
             status_badge,
@@ -1139,7 +1139,7 @@ impl App {
         let right_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(2),
+                Constraint::Length(1),
                 Constraint::Min(6),
             ])
             .split(main_chunks[1]);
@@ -1161,11 +1161,11 @@ impl App {
         let findings_count = self.findings.len();
         let patches_count = self.patches.len();
         let titles = vec![
-            format!(" [1] Flow "),
-            format!(" [2] Findings ({findings_count}) "),
-            format!(" [3] Patches ({patches_count}) "),
-            format!(" [4] Execution "),
-            format!(" [5] Skills "),
+            format!("  [1] Flow  "),
+            format!("  [2] Findings ({findings_count})  "),
+            format!("  [3] Patches ({patches_count})  "),
+            format!("  [4] Execution  "),
+            format!("  [5] Skills  "),
         ];
         let tabs = Tabs::new(titles)
             .select(self.current_tab)
@@ -1196,27 +1196,27 @@ impl App {
 
         let footer = if self.patches.is_empty() {
             Line::from(vec![
-                Span::raw(" "),
-                Span::styled(" [Space] ", Style::default().fg(Color::White).bg(Color::Rgb(24, 25, 31))),
-                Span::styled(" audit   ", Style::default().fg(Color::Rgb(110, 112, 120))),
-                Span::styled(" [Tab] ", Style::default().fg(Color::White).bg(Color::Rgb(24, 25, 31))),
-                Span::styled(" views   ", Style::default().fg(Color::Rgb(110, 112, 120))),
-                Span::styled(" [/config] ", Style::default().fg(Color::White).bg(Color::Rgb(24, 25, 31))),
-                Span::styled(" settings   ", Style::default().fg(Color::Rgb(110, 112, 120))),
-                Span::styled(" [Esc] ", Style::default().fg(Color::White).bg(Color::Rgb(24, 25, 31))),
-                Span::styled(" quit", Style::default().fg(Color::Rgb(110, 112, 120))),
+                Span::raw("  "),
+                Span::styled(" [Space] ", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
+                Span::styled(" audit    ", Style::default().fg(Color::Rgb(120, 122, 132))),
+                Span::styled(" [Tab] ", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
+                Span::styled(" views    ", Style::default().fg(Color::Rgb(120, 122, 132))),
+                Span::styled(" [/config] ", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
+                Span::styled(" settings    ", Style::default().fg(Color::Rgb(120, 122, 132))),
+                Span::styled(" [Esc] ", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
+                Span::styled(" quit", Style::default().fg(Color::Rgb(120, 122, 132))),
             ])
         } else {
             Line::from(vec![
-                Span::raw(" "),
-                Span::styled(" [Tab] ", Style::default().fg(Color::White).bg(Color::Rgb(24, 25, 31))),
-                Span::styled(" views   ", Style::default().fg(Color::Rgb(110, 112, 120))),
-                Span::styled(" [a] ", Style::default().fg(Color::White).bg(Color::Rgb(24, 25, 31))),
-                Span::styled(" apply patch   ", Style::default().fg(Color::Rgb(110, 112, 120))),
-                Span::styled(" [r] ", Style::default().fg(Color::White).bg(Color::Rgb(24, 25, 31))),
-                Span::styled(" rollback   ", Style::default().fg(Color::Rgb(110, 112, 120))),
-                Span::styled(" [Esc] ", Style::default().fg(Color::White).bg(Color::Rgb(24, 25, 31))),
-                Span::styled(" quit", Style::default().fg(Color::Rgb(110, 112, 120))),
+                Span::raw("  "),
+                Span::styled(" [Tab] ", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
+                Span::styled(" views    ", Style::default().fg(Color::Rgb(120, 122, 132))),
+                Span::styled(" [a] ", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
+                Span::styled(" apply patch    ", Style::default().fg(Color::Rgb(120, 122, 132))),
+                Span::styled(" [r] ", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
+                Span::styled(" rollback    ", Style::default().fg(Color::Rgb(120, 122, 132))),
+                Span::styled(" [Esc] ", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
+                Span::styled(" quit", Style::default().fg(Color::Rgb(120, 122, 132))),
             ])
         };
         f.render_widget(Paragraph::new(footer), root_chunks[2]);

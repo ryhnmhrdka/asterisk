@@ -49,6 +49,7 @@ impl PatchView {
             };
 
             list_lines.push(Line::from(vec![
+                Span::raw("  "),
                 Span::styled(format!("{}{}. ", prefix, i + 1), Style::default().fg(Color::Rgb(120, 125, 140))),
                 status_badge,
                 Span::raw(" "),
@@ -56,7 +57,7 @@ impl PatchView {
             ]));
 
             list_lines.push(Line::from(vec![
-                Span::raw("     "),
+                Span::raw("        "),
                 Span::styled(
                     patch.target_file.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(),
                     Style::default().fg(Color::Rgb(120, 125, 140)),
@@ -66,7 +67,10 @@ impl PatchView {
         }
 
         if patches.is_empty() {
-            list_lines.push(Line::from(Span::styled("no hardening patches pending.", Style::default().fg(Color::Rgb(120, 125, 140)))));
+            list_lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled("no hardening patches pending.", Style::default().fg(Color::Rgb(120, 125, 140))),
+            ]));
         }
 
         let list_block = Block::default()
@@ -94,6 +98,7 @@ impl PatchView {
 
         if patches.is_empty() {
             let empty_text = Line::from(vec![
+                Span::raw("  "),
                 Span::styled("no hardening patches pending  •  codebase is clean or no patches synthesized", Style::default().fg(Color::Rgb(120, 125, 140))),
             ]);
             f.render_widget(Paragraph::new(empty_text).block(Block::default().style(Style::default().bg(Color::Rgb(14, 15, 19)))), action_bar_area);
@@ -101,15 +106,18 @@ impl PatchView {
             let action_split = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
-                    Constraint::Length(26),
-                    Constraint::Length(18),
-                    Constraint::Min(10),
+                    Constraint::Length(2),  // Left margin
+                    Constraint::Length(20), // Apply button
+                    Constraint::Length(1),  // Spacer
+                    Constraint::Length(16), // Rollback button
+                    Constraint::Length(2),  // Spacer
+                    Constraint::Min(10),    // Status text
                 ])
                 .split(action_bar_area);
 
-            let apply_rect = action_split[0];
-            let rollback_rect = action_split[1];
-            let msg_rect = action_split[2];
+            let apply_rect = action_split[1];
+            let rollback_rect = action_split[3];
+            let msg_rect = action_split[5];
 
             let apply_block = Block::default()
                 .borders(Borders::NONE)
@@ -125,12 +133,12 @@ impl PatchView {
 
             let status_text = if let Some(msg) = action_msg {
                 Line::from(vec![
-                    Span::styled("  status: ", Style::default().fg(Color::Rgb(120, 125, 140))),
+                    Span::styled("status: ", Style::default().fg(Color::Rgb(120, 125, 140))),
                     Span::styled(msg, Style::default().fg(Color::White)),
                 ])
             } else {
                 Line::from(vec![
-                    Span::styled("  click buttons or press [a] / [r]", Style::default().fg(Color::Rgb(120, 125, 140))),
+                    Span::styled("click buttons or press [a] / [r]", Style::default().fg(Color::Rgb(120, 125, 140))),
                 ])
             };
             f.render_widget(Paragraph::new(status_text).block(Block::default().style(Style::default().bg(Color::Rgb(14, 15, 19)))), msg_rect);
@@ -149,31 +157,37 @@ impl PatchView {
         let diff_lines = if let Some(patch) = patches.get(selected_index) {
             let mut lines = Vec::new();
             lines.push(Line::from(vec![
+                Span::raw("  "),
                 Span::styled(" file: ", Style::default().fg(Color::Rgb(140, 145, 160)).bg(Color::Rgb(24, 25, 32))),
-                Span::raw(" "),
+                Span::raw("  "),
                 Span::styled(patch.target_file.display().to_string(), Style::default().fg(Color::White)),
             ]));
             lines.push(Line::from(vec![
+                Span::raw("  "),
                 Span::styled(" diff: ", Style::default().fg(Color::Rgb(140, 145, 160)).bg(Color::Rgb(24, 25, 32))),
-                Span::raw(" "),
+                Span::raw("  "),
                 Span::styled(&patch.explanation, Style::default().fg(Color::Rgb(170, 175, 190))),
             ]));
             lines.push(Line::raw(""));
 
             for line in patch.unified_diff.lines() {
+                let prefix_span = Span::raw("  ");
                 if line.starts_with('+') && !line.starts_with("+++") {
-                    lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Rgb(120, 220, 140)).add_modifier(Modifier::BOLD))));
+                    lines.push(Line::from(vec![prefix_span, Span::styled(line, Style::default().fg(Color::Rgb(120, 220, 140)).add_modifier(Modifier::BOLD))]));
                 } else if line.starts_with('-') && !line.starts_with("---") {
-                    lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Rgb(230, 100, 100)))));
+                    lines.push(Line::from(vec![prefix_span, Span::styled(line, Style::default().fg(Color::Rgb(230, 100, 100)))]));
                 } else if line.starts_with("---") || line.starts_with("+++") {
-                    lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Rgb(120, 125, 140)))));
+                    lines.push(Line::from(vec![prefix_span, Span::styled(line, Style::default().fg(Color::Rgb(120, 125, 140)))]));
                 } else {
-                    lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Rgb(150, 155, 170)))));
+                    lines.push(Line::from(vec![prefix_span, Span::styled(line, Style::default().fg(Color::Rgb(150, 155, 170)))]));
                 }
             }
             lines
         } else {
-            vec![Line::from(Span::styled("no remediation patches available • workspace clean or run defense audit.", Style::default().fg(Color::Rgb(120, 125, 140))))]
+            vec![Line::from(vec![
+                Span::raw("  "),
+                Span::styled("no remediation patches available • workspace clean or run defense audit.", Style::default().fg(Color::Rgb(120, 125, 140))),
+            ])]
         };
 
         f.render_widget(Paragraph::new(diff_lines).block(diff_block), right_chunks[1]);
@@ -187,13 +201,22 @@ impl PatchView {
 
         let test_lines = if let Some(patch) = patches.get(selected_index) {
             let mut lines = Vec::new();
-            lines.push(Line::from(Span::styled("// automated security verification unit test", Style::default().fg(Color::Rgb(100, 105, 120)))));
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled("// automated security verification unit test", Style::default().fg(Color::Rgb(100, 105, 120))),
+            ]));
             for l in patch.unit_test_code.lines() {
-                lines.push(Line::from(Span::styled(l, Style::default().fg(Color::Rgb(180, 185, 200)))));
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(l, Style::default().fg(Color::Rgb(180, 185, 200))),
+                ]));
             }
             lines
         } else {
-            vec![Line::from(Span::styled("no remediation test harness • workspace clean or run defense audit.", Style::default().fg(Color::Rgb(120, 125, 140))))]
+            vec![Line::from(vec![
+                Span::raw("  "),
+                Span::styled("no remediation test harness • workspace clean or run defense audit.", Style::default().fg(Color::Rgb(120, 125, 140))),
+            ])]
         };
 
         f.render_widget(Paragraph::new(test_lines).block(test_block), right_chunks[2]);

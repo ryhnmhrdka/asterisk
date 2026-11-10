@@ -25,6 +25,9 @@ pub fn parse_markdown(input: &str) -> Vec<Line<'static>> {
                     if !current_spans.is_empty() {
                         lines.push(Line::from(std::mem::take(&mut current_spans)));
                     }
+                    if !lines.is_empty() {
+                        lines.push(Line::raw(""));
+                    }
                     heading_level = Some(level as usize);
                 }
                 Tag::Paragraph => {
@@ -33,6 +36,9 @@ pub fn parse_markdown(input: &str) -> Vec<Line<'static>> {
                     }
                 }
                 Tag::List(start_num) => {
+                    if !current_spans.is_empty() {
+                        lines.push(Line::from(std::mem::take(&mut current_spans)));
+                    }
                     list_index = start_num;
                 }
                 Tag::Item => {
@@ -46,7 +52,7 @@ pub fn parse_markdown(input: &str) -> Vec<Line<'static>> {
                     } else {
                         "  • ".to_string()
                     };
-                    current_spans.push(Span::styled(prefix, Style::default().fg(Color::DarkGray)));
+                    current_spans.push(Span::styled(prefix, Style::default().fg(Color::Rgb(120, 125, 140))));
                 }
                 Tag::BlockQuote(_) => {
                     in_blockquote = true;

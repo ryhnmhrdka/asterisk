@@ -62,7 +62,7 @@ impl GraphView {
 
         let legend_text = vec![
             Line::from(vec![
-                Span::raw(" "),
+                Span::raw("  "),
                 Span::styled("flow: ", Style::default().fg(Color::Rgb(100, 102, 110))),
                 Span::styled("orchestrator", Style::default().fg(Color::White)),
                 Span::styled("  ●  ", Style::default().fg(Color::Rgb(60, 62, 70))),
@@ -77,9 +77,9 @@ impl GraphView {
                 Span::styled("gate", Style::default().fg(Color::White)),
             ]),
             Line::from(vec![
-                Span::raw(" "),
+                Span::raw("  "),
                 Span::styled("edges: ", Style::default().fg(Color::Rgb(100, 102, 110))),
-                Span::styled("animating = running  │  static = completed  │  click node to pause/inspect", Style::default().fg(Color::Rgb(110, 112, 120))),
+                Span::styled("animating = running  •  static = completed  •  click node to pause/inspect", Style::default().fg(Color::Rgb(110, 112, 120))),
             ]),
         ];
 

@@ -99,28 +99,35 @@ impl MatrixView {
         let detail_content = if let Some(selected) = findings.get(selected_index) {
             vec![
                 Line::from(vec![
-                    Span::styled(" description  ", Style::default().fg(Color::Rgb(140, 145, 160)).bg(Color::Rgb(24, 25, 32))),
-                    Span::raw(" "),
+                    Span::raw("  "),
+                    Span::styled(" description ", Style::default().fg(Color::Rgb(140, 145, 160)).bg(Color::Rgb(24, 25, 32))),
+                    Span::raw("  "),
                     Span::styled(&selected.description, Style::default().fg(Color::White)),
                 ]),
                 Line::from(vec![
-                    Span::styled(" code         ", Style::default().fg(Color::Rgb(140, 145, 160)).bg(Color::Rgb(24, 25, 32))),
-                    Span::raw(" "),
+                    Span::raw("  "),
+                    Span::styled(" code        ", Style::default().fg(Color::Rgb(140, 145, 160)).bg(Color::Rgb(24, 25, 32))),
+                    Span::raw("  "),
                     Span::styled(&selected.snippet, Style::default().fg(Color::Rgb(215, 220, 230))),
                 ]),
                 Line::from(vec![
-                    Span::styled(" remediation  ", Style::default().fg(Color::Rgb(140, 145, 160)).bg(Color::Rgb(24, 25, 32))),
-                    Span::raw(" "),
+                    Span::raw("  "),
+                    Span::styled(" remediation ", Style::default().fg(Color::Rgb(140, 145, 160)).bg(Color::Rgb(24, 25, 32))),
+                    Span::raw("  "),
                     Span::styled(&selected.recommendation, Style::default().fg(Color::Rgb(170, 175, 190))),
                 ]),
                 Line::from(vec![
-                    Span::styled(" shortcuts    ", Style::default().fg(Color::Rgb(120, 125, 140)).bg(Color::Rgb(20, 21, 27))),
-                    Span::raw(" "),
+                    Span::raw("  "),
+                    Span::styled(" shortcuts   ", Style::default().fg(Color::Rgb(120, 125, 140)).bg(Color::Rgb(20, 21, 27))),
+                    Span::raw("  "),
                     Span::styled("click row to inspect  •  tab [3] review diff  •  [a] apply patch", Style::default().fg(Color::Rgb(120, 125, 140))),
                 ]),
             ]
         } else {
-            vec![Line::from(Span::styled(" no vulnerabilities identified  •  workspace clean or press [space] to run defense audit.", Style::default().fg(Color::Rgb(120, 125, 140))))]
+            vec![Line::from(vec![
+                Span::raw("  "),
+                Span::styled("no vulnerabilities identified  •  workspace clean or press [space] to run defense audit.", Style::default().fg(Color::Rgb(120, 125, 140))),
+            ])]
         };
 
         f.render_widget(Paragraph::new(detail_content).block(detail_block), chunks[1]);

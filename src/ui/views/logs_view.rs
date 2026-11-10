@@ -30,22 +30,26 @@ impl LogsView {
             let time_str = entry.timestamp.format("%H:%M:%S").to_string();
 
             let mut spans = vec![
-                Span::styled(format!("{time_str}  "), Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{agent_badge:16}  "), Style::default().fg(Color::White)),
-                Span::styled(format!("{level_badge:8}  "), Style::default().fg(Color::DarkGray)),
+                Span::raw("  "),
+                Span::styled(format!("{time_str}  "), Style::default().fg(Color::Rgb(110, 112, 120))),
+                Span::styled(format!("{agent_badge:<16} "), Style::default().fg(Color::White)),
+                Span::styled(format!("{level_badge:<8} "), Style::default().fg(Color::Rgb(130, 132, 142))),
             ];
 
             if entry.is_improvisation {
                 spans.push(Span::styled(&entry.message, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
             } else {
-                spans.push(Span::styled(&entry.message, Style::default().fg(Color::Gray)));
+                spans.push(Span::styled(&entry.message, Style::default().fg(Color::Rgb(180, 182, 192))));
             }
 
             lines.push(Line::from(spans));
         }
 
         if lines.is_empty() {
-            lines.push(Line::from(Span::styled("awaiting execution dispatch. press [space] to run audit harness.", Style::default().fg(Color::DarkGray))));
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled("awaiting execution dispatch. press [space] to run audit harness.", Style::default().fg(Color::Rgb(120, 122, 130))),
+            ]));
         }
 
         f.render_widget(Paragraph::new(lines).block(block), area);

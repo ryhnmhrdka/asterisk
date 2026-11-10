@@ -39,11 +39,11 @@ impl SidebarView {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(5),                                               // 1. Review Modules Tray
+                Constraint::Length(4),                                               // 1. Review Modules Tray
                 Constraint::Min(8),                                                  // 2. Chatbot Message Stream
                 Constraint::Length(if awaiting_confirmation { 3 } else { 0 }),       // 3. Confirmation Buttons
-                Constraint::Length(5),                                               // 4. Module Inspector Box
-                Constraint::Length(3),                                               // 5. Input Prompt Row
+                Constraint::Length(4),                                               // 4. Module Inspector Box
+                Constraint::Length(1),                                               // 5. Input Prompt Row
             ])
             .split(area);
 
@@ -72,9 +72,9 @@ impl SidebarView {
 
         let mut tray_lines = Vec::new();
         tray_lines.push(Line::from(vec![
-            Span::raw(" "),
-            Span::styled(" modules ", Style::default().fg(Color::Rgb(180, 182, 192)).bg(Color::Rgb(28, 29, 36)).add_modifier(Modifier::BOLD)),
-            Span::styled("  click row to inspect", Style::default().fg(Color::Rgb(100, 102, 110))),
+            Span::raw("  "),
+            Span::styled(" MODULES ", Style::default().fg(Color::Rgb(180, 182, 192)).bg(Color::Rgb(28, 29, 36)).add_modifier(Modifier::BOLD)),
+            Span::styled("  click row to inspect", Style::default().fg(Color::Rgb(110, 112, 120))),
         ]));
 
         let mut key_subagents: Vec<(String, String, String)> = nodes_info
@@ -94,8 +94,9 @@ impl SidebarView {
 
         if key_subagents.is_empty() {
             tray_lines.push(Line::from(vec![
-                Span::styled("workspace idle", Style::default().fg(Color::Rgb(100, 100, 105))),
-                Span::styled("  │  press [space] or type /scan to execute security audit", Style::default().fg(Color::Rgb(70, 70, 75))),
+                Span::raw("  "),
+                Span::styled("workspace idle", Style::default().fg(Color::Rgb(120, 122, 130))),
+                Span::styled("  •  press [space] or /scan to audit", Style::default().fg(Color::Rgb(90, 92, 100))),
             ]));
         } else {
             let tray_items: Vec<(&str, &str, &str)> = key_subagents
@@ -117,9 +118,10 @@ impl SidebarView {
                 targets.subagent_rows.push((id.to_string(), row_rect));
 
                 tray_lines.push(Line::from(vec![
-                    Span::styled(format!(" {status_icon} "), Style::default().fg(status_color)),
-                    Span::styled(format!("{name:18}"), Style::default().fg(Color::White)),
-                    Span::styled(format!(" {target}"), Style::default().fg(Color::Rgb(100, 100, 105))),
+                    Span::raw("  "),
+                    Span::styled(format!("{status_icon} "), Style::default().fg(status_color)),
+                    Span::styled(format!("{name:<16} "), Style::default().fg(Color::White)),
+                    Span::styled(format!("{target}"), Style::default().fg(Color::Rgb(120, 122, 130))),
                 ]));
                 row_y += 1;
             }
@@ -143,7 +145,7 @@ impl SidebarView {
             match msg {
                 ChatMessage::User(text) => {
                     // Full-width solid gray background (mentok ke kiri dan kanan, no border collision)
-                    let bg_color = Color::Rgb(28, 30, 34);
+                    let bg_color = Color::Rgb(26, 28, 34);
                     let user_style = Style::default().bg(bg_color);
 
                     chat_lines.push(Line::from(vec![
@@ -202,43 +204,43 @@ impl SidebarView {
                 }
                 ChatMessage::Thinking { agent, thought } => {
                     chat_lines.push(Line::from(vec![
-                        Span::styled(" ⠋ ", Style::default().fg(Color::Rgb(100, 100, 110))),
-                        Span::styled(format!("[{agent} processing]: "), Style::default().fg(Color::Rgb(120, 120, 130))),
-                        Span::styled(thought, Style::default().fg(Color::Rgb(150, 150, 160)).add_modifier(Modifier::ITALIC)),
+                        Span::styled("  ⠋ ", Style::default().fg(Color::Rgb(120, 122, 132))),
+                        Span::styled(format!("[{agent}]: "), Style::default().fg(Color::Rgb(130, 132, 142))),
+                        Span::styled(thought, Style::default().fg(Color::Rgb(160, 162, 172)).add_modifier(Modifier::ITALIC)),
                     ]));
                 }
                 ChatMessage::ToolCall { tool, input, .. } => {
                     chat_lines.push(Line::from(vec![
-                        Span::styled(" ❯ task: ", Style::default().fg(Color::Rgb(100, 100, 110))),
+                        Span::styled("  ❯ task: ", Style::default().fg(Color::Rgb(120, 122, 132))),
                         Span::styled(format!("{tool} "), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                        Span::styled(format!("({input})"), Style::default().fg(Color::Rgb(120, 120, 130))),
+                        Span::styled(format!("({input})"), Style::default().fg(Color::Rgb(130, 132, 142))),
                     ]));
                 }
                 ChatMessage::ToolResult { output, elapsed_ms, .. } => {
                     let ms_str = elapsed_ms.map(|ms| format!(" ({ms}ms)")).unwrap_or_default();
                     chat_lines.push(Line::from(vec![
-                        Span::styled("   ✔ status: ", Style::default().fg(Color::Rgb(130, 190, 130))),
-                        Span::styled(output, Style::default().fg(Color::Rgb(210, 210, 215))),
-                        Span::styled(ms_str, Style::default().fg(Color::Rgb(100, 100, 105))),
+                        Span::styled("    ✔ result: ", Style::default().fg(Color::Rgb(120, 195, 130))),
+                        Span::styled(output, Style::default().fg(Color::Rgb(210, 212, 220))),
+                        Span::styled(ms_str, Style::default().fg(Color::Rgb(110, 112, 120))),
                     ]));
                 }
                 ChatMessage::Agent { sender, text } => {
                     // Orchestrator has NO BOX - clean streaming markdown & latex
                     chat_lines.push(Line::from(vec![
-                        Span::styled(format!("● {sender}:"), Style::default().fg(Color::Rgb(85, 155, 255)).add_modifier(Modifier::BOLD)),
+                        Span::styled(format!("  ● {sender}:"), Style::default().fg(Color::Rgb(100, 165, 255)).add_modifier(Modifier::BOLD)),
                     ]));
 
                     let parsed = parse_markdown(text);
                     for pl in parsed {
-                        let mut spans = vec![Span::raw("  ")];
+                        let mut spans = vec![Span::raw("    ")];
                         spans.extend(pl.spans);
                         chat_lines.push(Line::from(spans));
                     }
                 }
                 ChatMessage::System(text) => {
                     chat_lines.push(Line::from(vec![
-                        Span::styled("● system: ", Style::default().fg(Color::Rgb(100, 100, 110))),
-                        Span::styled(text, Style::default().fg(Color::Rgb(200, 200, 205))),
+                        Span::styled("  ● system: ", Style::default().fg(Color::Rgb(110, 112, 122))),
+                        Span::styled(text, Style::default().fg(Color::Rgb(200, 202, 210))),
                     ]));
                 }
             }
@@ -284,42 +286,43 @@ impl SidebarView {
         let node_area = chunks[3];
         let (node_lines, pause_rect, apply_rect) = if let Some(node) = selected_node {
             let status_str = if node.is_paused { "paused" } else { node.status.as_str() };
-            let p_rect = Rect::new(node_area.x + 1, node_area.y + 3, 14.min(node_area.width.saturating_sub(2)), 1);
-            let a_rect = Rect::new(node_area.x + 16, node_area.y + 3, 16.min(node_area.width.saturating_sub(17)), 1);
+            let p_rect = Rect::new(node_area.x + 2, node_area.y + 2, 14.min(node_area.width.saturating_sub(4)), 1);
+            let a_rect = Rect::new(node_area.x + 18, node_area.y + 2, 18.min(node_area.width.saturating_sub(20)), 1);
 
             let mut action_spans = Vec::new();
+            action_spans.push(Span::raw("  "));
             let mut opt_pause = None;
             let mut opt_apply = None;
 
             if node.status == AgentStatus::Running || node.is_paused {
                 action_spans.push(Span::styled(
                     if node.is_paused { " [ ▶ Resume ] " } else { " [ ⏸ Pause ] " },
-                    Style::default().fg(Color::White).bg(Color::Rgb(38, 38, 42)),
+                    Style::default().fg(Color::White).bg(Color::Rgb(38, 40, 50)),
                 ));
-                action_spans.push(Span::raw(" "));
+                action_spans.push(Span::raw("  "));
                 opt_pause = Some(p_rect);
             }
 
             if has_patches {
                 action_spans.push(Span::styled(
                     " [ ✓ Apply Patch ] ",
-                    Style::default().fg(Color::White).bg(Color::Rgb(38, 38, 42)),
+                    Style::default().fg(Color::White).bg(Color::Rgb(38, 40, 50)),
                 ));
                 opt_apply = Some(a_rect);
             }
 
-            if action_spans.is_empty() {
-                action_spans.push(Span::styled("no pending actions", Style::default().fg(Color::DarkGray)));
+            if opt_pause.is_none() && opt_apply.is_none() {
+                action_spans.push(Span::styled("no pending actions", Style::default().fg(Color::Rgb(110, 112, 120))));
             }
 
             let lines = vec![
                 Line::from(vec![
-                    Span::styled("module: ", Style::default().fg(Color::Rgb(110, 110, 115))),
+                    Span::styled("  module: ", Style::default().fg(Color::Rgb(110, 112, 120))),
                     Span::styled(&node.id, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("  [{status_str}]"), Style::default().fg(if node.is_paused { Color::DarkGray } else { Color::White })),
+                    Span::styled(format!("  [{status_str}]"), Style::default().fg(if node.is_paused { Color::Rgb(140, 142, 150) } else { Color::White })),
                 ]),
                 Line::from(vec![
-                    Span::styled("target: ", Style::default().fg(Color::Rgb(110, 110, 115))),
+                    Span::styled("  target: ", Style::default().fg(Color::Rgb(110, 112, 120))),
                     Span::styled(node.target_path.as_deref().unwrap_or("-"), Style::default().fg(Color::White)),
                 ]),
                 Line::from(action_spans),
@@ -327,8 +330,11 @@ impl SidebarView {
             (lines, opt_pause, opt_apply)
         } else {
             let lines = vec![
-                Line::from(Span::styled("click any module on graph to inspect", Style::default().fg(Color::Rgb(110, 110, 115)))),
-                Line::from(Span::styled("or use arrow keys to navigate flow", Style::default().fg(Color::Rgb(80, 80, 85)))),
+                Line::from(vec![
+                    Span::styled("  ● ", Style::default().fg(Color::Rgb(100, 102, 112))),
+                    Span::styled("click any module on graph to inspect", Style::default().fg(Color::Rgb(120, 122, 130))),
+                ]),
+                Line::from(Span::styled("    or use arrow keys to navigate flow", Style::default().fg(Color::Rgb(90, 92, 100)))),
             ];
             (lines, None, None)
         };
@@ -343,12 +349,13 @@ impl SidebarView {
             .direction(Direction::Horizontal)
             .constraints([
                 Constraint::Min(10),
-                Constraint::Length(10),
+                Constraint::Length(1), // Quiet spacer
+                Constraint::Length(10), // Send button
             ])
             .split(prompt_row);
 
         let input_rect = input_split[0];
-        let send_rect = input_split[1];
+        let send_rect = input_split[2];
 
         let prompt_block = Block::default()
             .style(Style::default().bg(Color::Rgb(24, 25, 31)));
@@ -388,7 +395,7 @@ impl SidebarView {
         if !suggestions.is_empty() {
             let visible_count = suggestions.len().min(6);
             let popup_height = (visible_count + 2) as u16;
-            let popup_width = input_rect.width + send_rect.width;
+            let popup_width = input_rect.width + send_rect.width + 1;
             let popup_y = input_rect.y.saturating_sub(popup_height);
             let popup_rect = Rect::new(input_rect.x, popup_y, popup_width, popup_height);
 
@@ -396,9 +403,10 @@ impl SidebarView {
 
             let popup_block = Block::default()
                 .borders(Borders::ALL)
-                .border_type(BorderType::Plain)
-                .border_style(Style::default().fg(Color::Rgb(80, 80, 85)))
-                .title(Span::styled(" commands [↑/↓ select, Tab complete] ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::Rgb(60, 62, 72)))
+                .style(Style::default().bg(Color::Rgb(16, 17, 22)))
+                .title(Span::styled("  commands [↑/↓ select, Tab complete]  ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
 
             let start_idx = if selected_suggestion >= visible_count {
                 selected_suggestion + 1 - visible_count
@@ -417,17 +425,17 @@ impl SidebarView {
 
                 if is_selected {
                     suggestion_lines.push(Line::from(vec![
-                        Span::styled("> ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
+                        Span::styled(" ▸ ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
                         Span::styled(format!("{:<10} ", cmd.name), Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
-                        Span::styled(format!("{:<12} ", cmd.args), Style::default().fg(Color::Rgb(60, 60, 65)).bg(Color::White)),
+                        Span::styled(format!("{:<14} ", cmd.args), Style::default().fg(Color::Rgb(60, 62, 70)).bg(Color::White)),
                         Span::styled(cmd.description.to_string(), Style::default().fg(Color::Black).bg(Color::White)),
                     ]));
                 } else {
                     suggestion_lines.push(Line::from(vec![
-                        Span::styled("  ", Style::default().fg(Color::DarkGray)),
+                        Span::styled("   ", Style::default().fg(Color::Rgb(110, 112, 120))),
                         Span::styled(format!("{:<10} ", cmd.name), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                        Span::styled(format!("{:<12} ", cmd.args), Style::default().fg(Color::Rgb(120, 120, 125))),
-                        Span::styled(cmd.description.to_string(), Style::default().fg(Color::Rgb(140, 140, 145))),
+                        Span::styled(format!("{:<14} ", cmd.args), Style::default().fg(Color::Rgb(130, 132, 142))),
+                        Span::styled(cmd.description.to_string(), Style::default().fg(Color::Rgb(150, 152, 160))),
                     ]));
                 }
             }

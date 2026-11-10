@@ -58,16 +58,23 @@ impl SidebarView {
             suggestion_rows: Vec::new(),
         };
 
-        // 1. Review Modules Tray
-        let tray_block = Block::default()
-            .borders(Borders::BOTTOM | Borders::RIGHT)
+        // Deep obsidian filled sidebar with single quiet right border
+        let sidebar_bg = Block::default()
+            .borders(Borders::RIGHT)
             .border_type(BorderType::Plain)
-            .border_style(Style::default().fg(Color::Rgb(50, 50, 55)));
+            .border_style(Style::default().fg(Color::Rgb(28, 29, 36)))
+            .style(Style::default().bg(Color::Rgb(16, 17, 21)));
+        f.render_widget(sidebar_bg, area);
+
+        // 1. Review Modules Tray (Clean filled banner, NO bottom border)
+        let tray_block = Block::default()
+            .style(Style::default().bg(Color::Rgb(20, 21, 26)));
 
         let mut tray_lines = Vec::new();
         tray_lines.push(Line::from(vec![
-            Span::styled("review modules: ", Style::default().fg(Color::Rgb(120, 120, 125))),
-            Span::styled("(click row to inspect)", Style::default().fg(Color::Rgb(80, 80, 85))),
+            Span::raw(" "),
+            Span::styled(" modules ", Style::default().fg(Color::Rgb(180, 182, 192)).bg(Color::Rgb(28, 29, 36)).add_modifier(Modifier::BOLD)),
+            Span::styled("  click row to inspect", Style::default().fg(Color::Rgb(100, 102, 110))),
         ]));
 
         let mut key_subagents: Vec<(String, String, String)> = nodes_info
@@ -120,11 +127,9 @@ impl SidebarView {
 
         f.render_widget(Paragraph::new(tray_lines).block(tray_block), tray_area);
 
-        // 2. Chat Message Stream
+        // 2. Chat Message Stream (Clean filled surface, NO borders)
         let chat_block = Block::default()
-            .borders(Borders::RIGHT)
-            .border_type(BorderType::Plain)
-            .border_style(Style::default().fg(Color::Rgb(50, 50, 55)));
+            .style(Style::default().bg(Color::Rgb(16, 17, 21)));
 
         let mut chat_lines = Vec::new();
         let total_msgs = chat_messages.len();
@@ -272,11 +277,9 @@ impl SidebarView {
             targets.btn_cancel = Some(btn_canc_rect);
         }
 
-        // 4. Module Inspector Box
+        // 4. Module Inspector Box (Sleek filled surface, NO borders)
         let node_block = Block::default()
-            .borders(Borders::TOP | Borders::RIGHT)
-            .border_type(BorderType::Plain)
-            .border_style(Style::default().fg(Color::Rgb(50, 50, 55)));
+            .style(Style::default().bg(Color::Rgb(22, 23, 29)));
 
         let node_area = chunks[3];
         let (node_lines, pause_rect, apply_rect) = if let Some(node) = selected_node {
@@ -348,25 +351,23 @@ impl SidebarView {
         let send_rect = input_split[1];
 
         let prompt_block = Block::default()
-            .borders(Borders::TOP | Borders::RIGHT)
-            .border_type(BorderType::Plain)
-            .border_style(Style::default().fg(Color::Rgb(50, 50, 55)));
+            .style(Style::default().bg(Color::Rgb(24, 25, 31)));
 
         let prompt_display = if prompt_input.is_empty() {
             if awaiting_confirmation {
                 vec![
-                    Span::styled("> ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled("click [Execute] or type 'y'... ", Style::default().fg(Color::Rgb(100, 100, 105))),
+                    Span::styled(" > ", Style::default().fg(Color::Rgb(255, 200, 100)).add_modifier(Modifier::BOLD)),
+                    Span::styled("click [Execute] or type 'y'... ", Style::default().fg(Color::Rgb(110, 112, 120))),
                 ]
             } else {
                 vec![
-                    Span::styled("> ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled("type instructions or commands... ", Style::default().fg(Color::Rgb(100, 100, 105))),
+                    Span::styled(" > ", Style::default().fg(Color::Rgb(160, 200, 255)).add_modifier(Modifier::BOLD)),
+                    Span::styled("type instructions or slash commands... ", Style::default().fg(Color::Rgb(100, 102, 112))),
                 ]
             }
         } else {
             vec![
-                Span::styled("> ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(" > ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
                 Span::styled(prompt_input, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
                 Span::styled("█", Style::default().fg(Color::White)),
             ]
@@ -374,10 +375,9 @@ impl SidebarView {
 
         f.render_widget(Paragraph::new(Line::from(prompt_display)).block(prompt_block), input_rect);
 
-        // [ Send ↵ ] Button
+        // [ Send ↵ ] Button (Sleek filled pill, NO borders)
         let send_block = Block::default()
-            .borders(Borders::TOP | Borders::RIGHT)
-            .border_style(Style::default().fg(Color::White));
+            .style(Style::default().bg(Color::White));
         let send_text = Line::from(Span::styled(" Send ↵ ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)));
         f.render_widget(Paragraph::new(send_text).centered().block(send_block), send_rect);
 

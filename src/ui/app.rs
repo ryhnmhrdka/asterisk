@@ -17,7 +17,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Tabs},
+    widgets::{Block, Paragraph, Tabs},
     Frame,
 };
 use std::collections::{HashMap, HashSet};
@@ -1060,6 +1060,9 @@ impl App {
     }
 
     fn render_workspace(&mut self, f: &mut Frame, area: Rect) {
+        // Deep obsidian background fill
+        f.render_widget(Block::default().style(Style::default().bg(Color::Rgb(12, 13, 16))), area);
+
         let root_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -1069,28 +1072,38 @@ impl App {
             ])
             .split(area);
 
-        // Top Header
+        // Top Header Bar with sleek surface fill
+        let header_block = Block::default().style(Style::default().bg(Color::Rgb(18, 19, 24)));
+        f.render_widget(header_block, root_chunks[0]);
+
         let status_badge = if self.awaiting_confirmation {
-            Span::styled(" [pending confirmation] ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD))
+            Span::styled(" ● awaiting confirmation ", Style::default().fg(Color::Rgb(255, 200, 100)).bg(Color::Rgb(36, 30, 20)).add_modifier(Modifier::BOLD))
         } else if self.is_running {
-            Span::styled(" [scanning] ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD))
+            Span::styled(" ● scanning ", Style::default().fg(Color::Rgb(140, 200, 255)).bg(Color::Rgb(20, 28, 40)).add_modifier(Modifier::BOLD))
         } else {
-            Span::styled(" [ready] ", Style::default().fg(Color::DarkGray))
+            Span::styled(" ● ready ", Style::default().fg(Color::Rgb(150, 220, 150)).bg(Color::Rgb(20, 30, 22)))
         };
 
         let unpatched_count = self.findings.iter().filter(|x| !x.patched).count();
+        let findings_pill = if unpatched_count > 0 {
+            Span::styled(format!(" {unpatched_count} unresolved "), Style::default().fg(Color::Rgb(255, 140, 140)).bg(Color::Rgb(40, 22, 26)).add_modifier(Modifier::BOLD))
+        } else {
+            Span::styled(" 0 findings ", Style::default().fg(Color::Rgb(150, 152, 160)).bg(Color::Rgb(26, 27, 33)))
+        };
+
         let top_header = Line::from(vec![
-            Span::styled("constellation", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            Span::styled(" :: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(self.target_dir.display().to_string(), Style::default().fg(Color::White)),
-            Span::styled("  │  files: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(self.profile.total_files.to_string(), Style::default().fg(Color::White)),
-            Span::styled("  │  findings: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{} ({} unresolved)", self.findings.len(), unpatched_count), Style::default().fg(Color::White)),
-            Span::styled("  │  patches: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(self.patches.len().to_string(), Style::default().fg(Color::White)),
-            Span::styled("  │  provider: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(self.active_provider.name(), Style::default().fg(Color::Rgb(140, 190, 255))),
+            Span::raw(" "),
+            Span::styled(" constellation ", Style::default().fg(Color::White).bg(Color::Rgb(28, 29, 36)).add_modifier(Modifier::BOLD)),
+            Span::raw("  "),
+            Span::styled(format!(" {} ", self.target_dir.display()), Style::default().fg(Color::Rgb(170, 172, 180)).bg(Color::Rgb(24, 25, 31))),
+            Span::raw(" "),
+            Span::styled(format!(" {} files ", self.profile.total_files), Style::default().fg(Color::Rgb(150, 152, 160)).bg(Color::Rgb(24, 25, 31))),
+            Span::raw(" "),
+            findings_pill,
+            Span::raw(" "),
+            Span::styled(format!(" {} patches ", self.patches.len()), Style::default().fg(Color::Rgb(150, 152, 160)).bg(Color::Rgb(24, 25, 31))),
+            Span::raw(" "),
+            Span::styled(format!(" {} ", self.active_provider.name()), Style::default().fg(Color::Rgb(160, 200, 255)).bg(Color::Rgb(22, 28, 40))),
             Span::raw("   "),
             status_badge,
         ]);
@@ -1131,8 +1144,10 @@ impl App {
             ])
             .split(main_chunks[1]);
 
-        // Calculate Clickable Tab Rectangles
+        // Modern Tab Bar surface
         let tab_bar_area = right_chunks[0];
+        f.render_widget(Block::default().style(Style::default().bg(Color::Rgb(14, 15, 19))), tab_bar_area);
+
         let tab_width = tab_bar_area.width / 5;
         let mut tab_rects = Vec::new();
         for i in 0..5 {
@@ -1154,9 +1169,9 @@ impl App {
         ];
         let tabs = Tabs::new(titles)
             .select(self.current_tab)
-            .style(Style::default().fg(Color::DarkGray))
-            .highlight_style(Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD))
-            .divider(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+            .style(Style::default().fg(Color::Rgb(130, 132, 142)).bg(Color::Rgb(14, 15, 19)))
+            .highlight_style(Style::default().fg(Color::White).bg(Color::Rgb(36, 38, 48)).add_modifier(Modifier::BOLD))
+            .divider(Span::styled(" ", Style::default().bg(Color::Rgb(14, 15, 19))));
         f.render_widget(tabs, right_chunks[0]);
 
         let content_area = right_chunks[1];
@@ -1175,28 +1190,33 @@ impl App {
             _ => {}
         }
 
-        // Bottom Footer Bar
+        // Bottom Footer Bar (Sleek surface fill, no ASCII pipe spam)
+        let footer_block = Block::default().style(Style::default().bg(Color::Rgb(14, 15, 19)));
+        f.render_widget(footer_block, root_chunks[2]);
+
         let footer = if self.patches.is_empty() {
             Line::from(vec![
-                Span::styled("space", Style::default().fg(Color::White)),
-                Span::styled(" audit  │  ", Style::default().fg(Color::DarkGray)),
-                Span::styled("tab", Style::default().fg(Color::White)),
-                Span::styled(" views  │  ", Style::default().fg(Color::DarkGray)),
-                Span::styled("/config", Style::default().fg(Color::White)),
-                Span::styled(" settings  │  ", Style::default().fg(Color::DarkGray)),
-                Span::styled("esc", Style::default().fg(Color::White)),
-                Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+                Span::raw(" "),
+                Span::styled(" [Space] ", Style::default().fg(Color::White).bg(Color::Rgb(24, 25, 31))),
+                Span::styled(" audit   ", Style::default().fg(Color::Rgb(110, 112, 120))),
+                Span::styled(" [Tab] ", Style::default().fg(Color::White).bg(Color::Rgb(24, 25, 31))),
+                Span::styled(" views   ", Style::default().fg(Color::Rgb(110, 112, 120))),
+                Span::styled(" [/config] ", Style::default().fg(Color::White).bg(Color::Rgb(24, 25, 31))),
+                Span::styled(" settings   ", Style::default().fg(Color::Rgb(110, 112, 120))),
+                Span::styled(" [Esc] ", Style::default().fg(Color::White).bg(Color::Rgb(24, 25, 31))),
+                Span::styled(" quit", Style::default().fg(Color::Rgb(110, 112, 120))),
             ])
         } else {
             Line::from(vec![
-                Span::styled("tab", Style::default().fg(Color::White)),
-                Span::styled(" views  │  ", Style::default().fg(Color::DarkGray)),
-                Span::styled("a", Style::default().fg(Color::White)),
-                Span::styled(" apply patch  │  ", Style::default().fg(Color::DarkGray)),
-                Span::styled("r", Style::default().fg(Color::White)),
-                Span::styled(" rollback  │  ", Style::default().fg(Color::DarkGray)),
-                Span::styled("esc", Style::default().fg(Color::White)),
-                Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+                Span::raw(" "),
+                Span::styled(" [Tab] ", Style::default().fg(Color::White).bg(Color::Rgb(24, 25, 31))),
+                Span::styled(" views   ", Style::default().fg(Color::Rgb(110, 112, 120))),
+                Span::styled(" [a] ", Style::default().fg(Color::White).bg(Color::Rgb(24, 25, 31))),
+                Span::styled(" apply patch   ", Style::default().fg(Color::Rgb(110, 112, 120))),
+                Span::styled(" [r] ", Style::default().fg(Color::White).bg(Color::Rgb(24, 25, 31))),
+                Span::styled(" rollback   ", Style::default().fg(Color::Rgb(110, 112, 120))),
+                Span::styled(" [Esc] ", Style::default().fg(Color::White).bg(Color::Rgb(24, 25, 31))),
+                Span::styled(" quit", Style::default().fg(Color::Rgb(110, 112, 120))),
             ])
         };
         f.render_widget(Paragraph::new(footer), root_chunks[2]);

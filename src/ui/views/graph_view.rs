@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::{Block, Paragraph},
     Frame,
 };
 
@@ -13,24 +13,25 @@ impl GraphView {
     pub fn render(f: &mut Frame, area: Rect, flow: &mut Flow<TextContent, StepEdge>, is_idle: bool) {
         if is_idle {
             let empty_block = Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Plain)
-                .border_style(Style::default().fg(Color::Rgb(50, 50, 55)))
-                .title(Span::styled(" workflow graph ", Style::default().fg(Color::White)));
+                .style(Style::default().bg(Color::Rgb(14, 15, 19)));
 
             let empty_msg = vec![
                 Line::from(""),
                 Line::from(""),
-                Line::from(Span::styled("workspace idle", Style::default().fg(Color::White).add_modifier(Modifier::BOLD))),
-                Line::from(""),
-                Line::from(Span::styled("no active defense workflow or security audit in progress.", Style::default().fg(Color::DarkGray))),
                 Line::from(""),
                 Line::from(vec![
-                    Span::styled("press ", Style::default().fg(Color::DarkGray)),
-                    Span::styled("[space]", Style::default().fg(Color::White)),
-                    Span::styled(" or type ", Style::default().fg(Color::DarkGray)),
-                    Span::styled("/scan", Style::default().fg(Color::White)),
-                    Span::styled(" to build dynamic analysis graph and execute security audit.", Style::default().fg(Color::DarkGray)),
+                    Span::styled(" ● ", Style::default().fg(Color::Rgb(140, 200, 255))),
+                    Span::styled("Workspace Defense Idle", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled("No active autonomous defense workflow or security audit in progress.", Style::default().fg(Color::Rgb(110, 112, 120)))),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Press ", Style::default().fg(Color::Rgb(110, 112, 120))),
+                    Span::styled(" [Space] ", Style::default().fg(Color::White).bg(Color::Rgb(28, 30, 38))),
+                    Span::styled(" or type ", Style::default().fg(Color::Rgb(110, 112, 120))),
+                    Span::styled(" /scan ", Style::default().fg(Color::White).bg(Color::Rgb(28, 30, 38))),
+                    Span::styled(" to construct dynamic AST graph and execute defense audit.", Style::default().fg(Color::Rgb(110, 112, 120))),
                 ]),
             ];
             let p = Paragraph::new(empty_msg)
@@ -54,31 +55,31 @@ impl GraphView {
         f.render_widget(flow as &mut Flow<TextContent, StepEdge>, canvas_area);
         f.render_widget(Controls::new(flow), canvas_area);
 
-        // 2. Minimalist Monochromatic Legend
+        // 2. Sleek filled legend, NO ASCII wireframes
         let legend_area = chunks[1];
         let legend_block = Block::default()
-            .borders(Borders::TOP)
-            .border_type(BorderType::Plain)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .style(Style::default().bg(Color::Rgb(14, 15, 19)));
 
         let legend_text = vec![
             Line::from(vec![
-                Span::styled("flow: ", Style::default().fg(Color::DarkGray)),
+                Span::raw(" "),
+                Span::styled("flow: ", Style::default().fg(Color::Rgb(100, 102, 110))),
                 Span::styled("orchestrator", Style::default().fg(Color::White)),
-                Span::styled(" -> ", Style::default().fg(Color::DarkGray)),
-                Span::styled("folders", Style::default().fg(Color::Gray)),
-                Span::styled(" -> ", Style::default().fg(Color::DarkGray)),
-                Span::styled("files", Style::default().fg(Color::Gray)),
-                Span::styled(" -> ", Style::default().fg(Color::DarkGray)),
+                Span::styled("  ●  ", Style::default().fg(Color::Rgb(60, 62, 70))),
+                Span::styled("folders", Style::default().fg(Color::Rgb(150, 152, 160))),
+                Span::styled("  ●  ", Style::default().fg(Color::Rgb(60, 62, 70))),
+                Span::styled("files", Style::default().fg(Color::Rgb(150, 152, 160))),
+                Span::styled("  ●  ", Style::default().fg(Color::Rgb(60, 62, 70))),
                 Span::styled("subagents", Style::default().fg(Color::White)),
-                Span::styled(" -> ", Style::default().fg(Color::DarkGray)),
-                Span::styled("remediation", Style::default().fg(Color::Gray)),
-                Span::styled(" -> ", Style::default().fg(Color::DarkGray)),
+                Span::styled("  ●  ", Style::default().fg(Color::Rgb(60, 62, 70))),
+                Span::styled("remediation", Style::default().fg(Color::Rgb(150, 152, 160))),
+                Span::styled("  ●  ", Style::default().fg(Color::Rgb(60, 62, 70))),
                 Span::styled("gate", Style::default().fg(Color::White)),
             ]),
             Line::from(vec![
-                Span::styled("edges: ", Style::default().fg(Color::DarkGray)),
-                Span::styled("animating = running agent  │  static = pending/completed  │  click node to pause/inspect", Style::default().fg(Color::DarkGray)),
+                Span::raw(" "),
+                Span::styled("edges: ", Style::default().fg(Color::Rgb(100, 102, 110))),
+                Span::styled("animating = running  │  static = completed  │  click node to pause/inspect", Style::default().fg(Color::Rgb(110, 112, 120))),
             ]),
         ];
 

@@ -35,10 +35,10 @@ pub enum AppMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveModal {
     None,
-    /// Dedicated modal: list supported providers and supported models
-    ProviderModelSelect,
-    /// Integrated 1-flow modal: add/configure provider, custom endpoint URL & API key
-    ProviderSetup,
+    SelectProvider,
+    SelectModel,
+    ApiKeyInput,
+    BaseUrlInput,
 }
 
 #[derive(Default)]
@@ -81,6 +81,7 @@ pub struct App {
     pub expanded_messages: HashSet<usize>,
     pub show_key_modal: bool,
     pub active_modal: ActiveModal,
+    pub selected_provider_index: usize,
     pub selected_model_index: usize,
     pub modal_field: usize,
     pub key_modal_input: String,
@@ -137,6 +138,7 @@ impl App {
             expanded_messages: HashSet::new(),
             show_key_modal: false,
             active_modal: ActiveModal::None,
+            selected_provider_index: 0,
             selected_model_index: 0,
             modal_field: 0,
             key_modal_input: String::new(),
@@ -153,31 +155,63 @@ impl App {
         }
     }
 
-    pub fn open_provider_model_modal(&mut self, initial_field: usize) {
+    pub fn open_provider_modal(&mut self) {
         self.show_key_modal = true;
-        self.active_modal = ActiveModal::ProviderModelSelect;
-        self.modal_field = initial_field;
+        self.active_modal = ActiveModal::SelectProvider;
+        self.modal_field = 0;
+        self.key_modal_error = None;
+        let all = AiProvider::ALL;
+        self.selected_provider_index = all.iter().position(|p| *p == self.active_provider).unwrap_or(0);
+    }
+
+    pub fn open_model_modal(&mut self) {
+        self.show_key_modal = true;
+        self.active_modal = ActiveModal::SelectModel;
+        self.modal_field = 1;
         self.key_modal_error = None;
         self.model_modal_input = self.config.get_model();
         let presets = self.active_provider.preset_models();
         self.selected_model_index = presets.iter().position(|m| *m == self.model_modal_input).unwrap_or(0);
     }
 
-    pub fn open_setup_modal(&mut self, initial_field: usize) {
+    pub fn open_key_modal(&mut self) {
         self.show_key_modal = true;
-        self.active_modal = ActiveModal::ProviderSetup;
-        self.modal_field = initial_field;
+        self.active_modal = ActiveModal::ApiKeyInput;
+        self.modal_field = 2;
         self.key_modal_error = None;
         self.key_modal_input = self.config.get_api_key().unwrap_or_default();
-        self.model_modal_input = self.config.get_model();
+    }
+
+    pub fn open_url_modal(&mut self) {
+        self.show_key_modal = true;
+        self.active_modal = ActiveModal::BaseUrlInput;
+        self.modal_field = 1;
+        self.key_modal_error = None;
         self.url_modal_input = self.config.get_base_url().unwrap_or_default();
     }
 
-    pub fn open_config_modal(&mut self, initial_field: usize) {
-        if initial_field == 0 || initial_field == 1 {
-            self.open_provider_model_modal(initial_field);
+    pub fn open_provider_model_modal(&mut self, initial_field: usize) {
+        if initial_field == 0 {
+            self.open_provider_modal();
         } else {
-            self.open_setup_modal(initial_field);
+            self.open_model_modal();
+        }
+    }
+
+    pub fn open_setup_modal(&mut self, initial_field: usize) {
+        if initial_field == 1 {
+            self.open_url_modal();
+        } else {
+            self.open_key_modal();
+        }
+    }
+
+    pub fn open_config_modal(&mut self, initial_field: usize) {
+        match initial_field {
+            0 => self.open_provider_modal(),
+            1 => self.open_model_modal(),
+            2 => self.open_key_modal(),
+            _ => self.open_url_modal(),
         }
     }
 
@@ -187,7 +221,7 @@ impl App {
         }
 
         if !self.config.is_api_key_configured() {
-            self.open_setup_modal(2);
+            self.open_key_modal();
             self.action_msg = Some("API key required to execute defense workflow.".to_string());
             return;
         }
@@ -352,80 +386,131 @@ impl App {
         res || self.should_quit
     }
 
-    pub fn save_modal_config(&mut self) -> bool {
-        self.config.provider = self.active_provider;
-        let m = self.model_modal_input.trim();
-        self.config.model = if m.is_empty() { None } else { Some(m.to_string()) };
-
-        let u = self.url_modal_input.trim();
-        self.config.base_url = if u.is_empty() { None } else { Some(u.to_string()) };
-
+    pub fn save_key_modal(&mut self) -> bool {
         let k = self.key_modal_input.trim();
-        if k.is_empty() && self.active_provider != AiProvider::OllamaLocal && self.active_provider != AiProvider::Custom {
-            self.key_modal_error = Some("API key cannot be empty for this provider.".to_string());
+        if k.is_empty() && self.config.requires_api_key() {
+            self.key_modal_error = Some("API key cannot be empty.".to_string());
             return false;
         }
         self.config.api_key = if k.is_empty() { None } else { Some(k.to_string()) };
+        self.config.provider = self.active_provider;
         let _ = self.config.save();
         self.show_key_modal = false;
         self.active_modal = ActiveModal::None;
         self.key_modal_error = None;
-        self.action_msg = Some(format!("configuration applied for {}.", self.active_provider.name()));
+        self.action_msg = Some(format!("API key configured for {}.", self.active_provider.name()));
         true
+    }
+
+    pub fn save_modal_config(&mut self) -> bool {
+        match self.active_modal {
+            ActiveModal::ApiKeyInput => self.save_key_modal(),
+            ActiveModal::BaseUrlInput => {
+                let u = self.url_modal_input.trim();
+                self.config.base_url = if u.is_empty() { None } else { Some(u.to_string()) };
+                let _ = self.config.save();
+                if self.config.requires_api_key() && !self.config.is_api_key_configured() {
+                    self.open_key_modal();
+                } else {
+                    self.show_key_modal = false;
+                    self.active_modal = ActiveModal::None;
+                }
+                true
+            }
+            ActiveModal::SelectModel => {
+                self.handle_model_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()))
+            }
+            ActiveModal::SelectProvider => {
+                self.handle_provider_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()))
+            }
+            ActiveModal::None => {
+                self.show_key_modal = false;
+                true
+            }
+        }
     }
 
     fn handle_modal_key(&mut self, key: KeyEvent) -> bool {
         match self.active_modal {
-            ActiveModal::ProviderModelSelect => self.handle_provider_model_key(key),
-            ActiveModal::ProviderSetup | ActiveModal::None => self.handle_setup_key(key),
+            ActiveModal::SelectProvider => self.handle_provider_key(key),
+            ActiveModal::SelectModel => self.handle_model_key(key),
+            ActiveModal::ApiKeyInput => self.handle_key_input_key(key),
+            ActiveModal::BaseUrlInput => self.handle_url_input_key(key),
+            ActiveModal::None => {
+                self.show_key_modal = false;
+                false
+            }
         }
     }
 
-    fn handle_provider_model_key(&mut self, key: KeyEvent) -> bool {
+    fn handle_provider_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc => {
                 self.show_key_modal = false;
                 self.active_modal = ActiveModal::None;
                 false
             }
-            KeyCode::Char('+') | KeyCode::Char('c') => {
-                self.open_setup_modal(0);
+            KeyCode::Up => {
+                let len = AiProvider::ALL.len();
+                if self.selected_provider_index == 0 {
+                    self.selected_provider_index = len - 1;
+                } else {
+                    self.selected_provider_index -= 1;
+                }
+                if let Some(p) = AiProvider::ALL.get(self.selected_provider_index) {
+                    self.active_provider = *p;
+                    self.config.provider = *p;
+                }
                 false
             }
-            KeyCode::Left => {
-                let all = AiProvider::ALL;
-                let cur_idx = all.iter().position(|p| *p == self.active_provider).unwrap_or(0);
-                let prev_idx = if cur_idx == 0 { all.len() - 1 } else { cur_idx - 1 };
-                self.active_provider = all[prev_idx];
-                self.config.provider = self.active_provider;
-                self.selected_model_index = 0;
-                self.model_modal_input = self.active_provider.default_model().to_string();
-                false
-            }
-            KeyCode::Right => {
-                self.active_provider = self.active_provider.next();
-                self.config.provider = self.active_provider;
-                self.selected_model_index = 0;
-                self.model_modal_input = self.active_provider.default_model().to_string();
+            KeyCode::Down | KeyCode::Tab => {
+                let len = AiProvider::ALL.len();
+                self.selected_provider_index = (self.selected_provider_index + 1) % len;
+                if let Some(p) = AiProvider::ALL.get(self.selected_provider_index) {
+                    self.active_provider = *p;
+                    self.config.provider = *p;
+                }
                 false
             }
             KeyCode::Char(c @ '1'..='6') => {
                 let idx = (c as usize) - ('1' as usize);
-                if let Some(p) = AiProvider::ALL.get(idx) {
+                if idx < AiProvider::ALL.len() {
+                    self.selected_provider_index = idx;
+                    self.active_provider = AiProvider::ALL[idx];
+                    self.config.provider = self.active_provider;
+                }
+                false
+            }
+            KeyCode::Enter => {
+                if let Some(p) = AiProvider::ALL.get(self.selected_provider_index) {
                     self.active_provider = *p;
                     self.config.provider = *p;
-                    self.selected_model_index = 0;
-                    self.model_modal_input = p.default_model().to_string();
                 }
+                if self.active_provider == AiProvider::Custom && self.config.get_base_url().is_none() {
+                    self.open_url_modal();
+                } else {
+                    self.open_model_modal();
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn handle_model_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                self.show_key_modal = false;
+                self.active_modal = ActiveModal::None;
                 false
             }
             KeyCode::Up => {
                 let presets = self.active_provider.preset_models();
                 if !presets.is_empty() {
-                    if self.selected_model_index > 0 {
-                        self.selected_model_index -= 1;
-                    } else {
+                    if self.selected_model_index == 0 {
                         self.selected_model_index = presets.len() - 1;
+                    } else {
+                        self.selected_model_index -= 1;
                     }
                     self.model_modal_input = presets[self.selected_model_index].to_string();
                 }
@@ -434,35 +519,37 @@ impl App {
             KeyCode::Down | KeyCode::Tab => {
                 let presets = self.active_provider.preset_models();
                 if !presets.is_empty() {
-                    if self.selected_model_index + 1 < presets.len() {
-                        self.selected_model_index += 1;
-                    } else {
-                        self.selected_model_index = 0;
-                    }
+                    self.selected_model_index = (self.selected_model_index + 1) % presets.len();
                     self.model_modal_input = presets[self.selected_model_index].to_string();
                 }
                 false
             }
             KeyCode::Enter => {
-                self.config.provider = self.active_provider;
                 let presets = self.active_provider.preset_models();
                 let chosen = if let Some(m) = presets.get(self.selected_model_index) {
                     m.to_string()
                 } else {
-                    self.model_modal_input.clone()
+                    self.active_provider.default_model().to_string()
                 };
+                self.config.provider = self.active_provider;
                 self.config.model = Some(chosen.clone());
-                let _ = self.config.save();
-                self.show_key_modal = false;
-                self.active_modal = ActiveModal::None;
-                self.action_msg = Some(format!("provider & model set to {} / {chosen}.", self.active_provider.name()));
+                self.model_modal_input = chosen.clone();
+
+                if self.config.requires_api_key() && !self.config.is_api_key_configured() {
+                    self.open_key_modal();
+                } else {
+                    let _ = self.config.save();
+                    self.show_key_modal = false;
+                    self.active_modal = ActiveModal::None;
+                    self.action_msg = Some(format!("provider & model set to {} / {chosen}.", self.active_provider.name()));
+                }
                 false
             }
             _ => false,
         }
     }
 
-    fn handle_setup_key(&mut self, key: KeyEvent) -> bool {
+    fn handle_key_input_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc => {
                 self.show_key_modal = false;
@@ -470,73 +557,49 @@ impl App {
                 self.key_modal_error = None;
                 false
             }
-            KeyCode::Tab | KeyCode::Down => {
-                self.modal_field = (self.modal_field + 1) % 4;
-                false
-            }
-            KeyCode::BackTab | KeyCode::Up => {
-                self.modal_field = if self.modal_field == 0 { 3 } else { self.modal_field - 1 };
+            KeyCode::Backspace => {
+                self.key_modal_input.pop();
                 false
             }
             KeyCode::Enter => {
-                self.save_modal_config();
+                self.save_key_modal();
                 false
             }
-            KeyCode::Left if self.modal_field == 0 => {
-                let all = AiProvider::ALL;
-                let cur_idx = all.iter().position(|p| *p == self.active_provider).unwrap_or(0);
-                let prev_idx = if cur_idx == 0 { all.len() - 1 } else { cur_idx - 1 };
-                self.active_provider = all[prev_idx];
-                self.config.provider = self.active_provider;
-                self.model_modal_input = self.active_provider.default_model().to_string();
-                if let Some(u) = self.active_provider.default_base_url() {
-                    self.url_modal_input = u.to_string();
-                } else {
-                    self.url_modal_input.clear();
-                }
+            KeyCode::Char(c) => {
+                self.key_modal_input.push(c);
                 false
             }
-            KeyCode::Right if self.modal_field == 0 => {
-                self.active_provider = self.active_provider.next();
-                self.config.provider = self.active_provider;
-                self.model_modal_input = self.active_provider.default_model().to_string();
-                if let Some(u) = self.active_provider.default_base_url() {
-                    self.url_modal_input = u.to_string();
-                } else {
-                    self.url_modal_input.clear();
-                }
-                false
-            }
-            KeyCode::Char(c @ '1'..='6') if self.modal_field == 0 => {
-                let idx = (c as usize) - ('1' as usize);
-                if let Some(p) = AiProvider::ALL.get(idx) {
-                    self.active_provider = *p;
-                    self.config.provider = *p;
-                    self.model_modal_input = p.default_model().to_string();
-                    if let Some(u) = p.default_base_url() {
-                        self.url_modal_input = u.to_string();
-                    } else {
-                        self.url_modal_input.clear();
-                    }
-                }
+            _ => false,
+        }
+    }
+
+    fn handle_url_input_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                self.show_key_modal = false;
+                self.active_modal = ActiveModal::None;
+                self.key_modal_error = None;
                 false
             }
             KeyCode::Backspace => {
-                match self.modal_field {
-                    1 => { self.url_modal_input.pop(); }
-                    2 => { self.key_modal_input.pop(); }
-                    3 => { self.model_modal_input.pop(); }
-                    _ => {}
+                self.url_modal_input.pop();
+                false
+            }
+            KeyCode::Enter => {
+                let u = self.url_modal_input.trim();
+                self.config.base_url = if u.is_empty() { None } else { Some(u.to_string()) };
+                let _ = self.config.save();
+                if self.config.requires_api_key() && !self.config.is_api_key_configured() {
+                    self.open_key_modal();
+                } else {
+                    self.show_key_modal = false;
+                    self.active_modal = ActiveModal::None;
+                    self.action_msg = Some(format!("base URL updated for {}.", self.active_provider.name()));
                 }
                 false
             }
             KeyCode::Char(c) => {
-                match self.modal_field {
-                    1 => { self.url_modal_input.push(c); }
-                    2 => { self.key_modal_input.push(c); }
-                    3 => { self.model_modal_input.push(c); }
-                    _ => {}
-                }
+                self.url_modal_input.push(c);
                 false
             }
             _ => false,
@@ -931,12 +994,6 @@ impl App {
         if self.show_key_modal {
             if is_left_click {
                 if let Some(modal_targets) = &self.click_targets.modal {
-                    if let Some(btn_setup) = modal_targets.btn_setup_credentials {
-                        if in_rect(btn_setup, col, row) {
-                            self.open_setup_modal(0);
-                            return;
-                        }
-                    }
                     if let Some(btn_save) = modal_targets.btn_save {
                         if in_rect(btn_save, col, row) {
                             self.save_modal_config();
@@ -955,35 +1012,29 @@ impl App {
                         if in_rect(*rect, col, row) {
                             self.active_provider = *provider;
                             self.config.provider = *provider;
-                            self.selected_model_index = 0;
-                            self.model_modal_input = provider.default_model().to_string();
-                            if let Some(u) = provider.default_base_url() {
-                                self.url_modal_input = u.to_string();
+                            let all = AiProvider::ALL;
+                            self.selected_provider_index = all.iter().position(|p| *p == *provider).unwrap_or(0);
+                            if *provider == AiProvider::Custom && self.config.get_base_url().is_none() {
+                                self.open_url_modal();
                             } else {
-                                self.url_modal_input.clear();
+                                self.open_model_modal();
                             }
                             return;
                         }
                     }
                     for (preset, rect) in &modal_targets.model_preset_buttons {
                         if in_rect(*rect, col, row) {
-                            if self.active_modal == ActiveModal::ProviderModelSelect {
-                                self.config.provider = self.active_provider;
-                                self.config.model = Some(preset.clone());
+                            self.config.provider = self.active_provider;
+                            self.config.model = Some(preset.clone());
+                            self.model_modal_input = preset.clone();
+                            if self.config.requires_api_key() && !self.config.is_api_key_configured() {
+                                self.open_key_modal();
+                            } else {
                                 let _ = self.config.save();
                                 self.show_key_modal = false;
                                 self.active_modal = ActiveModal::None;
                                 self.action_msg = Some(format!("model selected: {preset} ({})", self.active_provider.name()));
-                            } else {
-                                self.model_modal_input = preset.clone();
-                                self.modal_field = 3;
                             }
-                            return;
-                        }
-                    }
-                    for (field_idx, rect) in &modal_targets.field_rects {
-                        if in_rect(*rect, col, row) {
-                            self.modal_field = *field_idx;
                             return;
                         }
                     }
@@ -1193,26 +1244,51 @@ impl App {
 
         if self.show_key_modal {
             let modal_targets = match self.active_modal {
-                ActiveModal::ProviderModelSelect => {
-                    ModalView::render_provider_model_selector(
+                ActiveModal::SelectProvider => {
+                    ModalView::render_provider_list(
+                        f,
+                        area,
+                        self.selected_provider_index,
+                    )
+                }
+                ActiveModal::SelectModel => {
+                    ModalView::render_model_list(
                         f,
                         area,
                         self.active_provider,
                         self.selected_model_index,
                     )
                 }
-                ActiveModal::ProviderSetup | ActiveModal::None => {
-                    ModalView::render_provider_setup_modal(
+                ActiveModal::ApiKeyInput => {
+                    ModalView::render_single_input_modal(
                         f,
                         area,
-                        self.active_provider,
-                        self.modal_field,
-                        &self.model_modal_input,
+                        &format!("API Key ({})", self.active_provider.name()),
+                        "Enter API key:",
                         &self.key_modal_input,
-                        &self.url_modal_input,
+                        true,
                         self.key_modal_error.as_deref(),
                     )
                 }
+                ActiveModal::BaseUrlInput => {
+                    ModalView::render_single_input_modal(
+                        f,
+                        area,
+                        &format!("Endpoint URL ({})", self.active_provider.name()),
+                        "Enter endpoint base URL:",
+                        &self.url_modal_input,
+                        false,
+                        self.key_modal_error.as_deref(),
+                    )
+                }
+                ActiveModal::None => crate::ui::views::modal_view::ModalClickTargets {
+                    provider_buttons: Vec::new(),
+                    model_preset_buttons: Vec::new(),
+                    field_rects: Vec::new(),
+                    btn_setup_credentials: None,
+                    btn_save: None,
+                    btn_cancel: None,
+                },
             };
             self.click_targets.modal = Some(modal_targets);
         } else {

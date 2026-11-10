@@ -120,9 +120,6 @@ fi
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new(target_dir, start_in_welcome);
-    if !start_in_welcome {
-        app.trigger_audit();
-    }
 
     'main: loop {
         app.update();

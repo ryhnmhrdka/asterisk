@@ -68,10 +68,12 @@ impl CodeContextGraph {
         }
     }
 
+    #[allow(dead_code)]
     pub fn total_nodes(&self) -> usize {
         self.graph.node_count()
     }
 
+    #[allow(dead_code)]
     pub fn total_edges(&self) -> usize {
         self.graph.edge_count()
     }

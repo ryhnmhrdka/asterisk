@@ -100,37 +100,64 @@ impl AgentGraphBuilder {
                 },
             );
 
-            // Active review module for this real file
-            let sec_id = format!("sub_sec_{idx}");
-            map.insert(
-                sec_id.clone(),
-                SproutedNodeInfo {
-                    id: sec_id,
-                    label: format!("secret scanner\n[{file}]"),
-                    tier: "subagent".to_string(),
-                    target_path: Some(file.clone()),
-                    status: AgentStatus::Idle,
-                    details: format!("credential audit on {file}"),
-                    findings_count: 0,
-                    is_paused: false,
-                },
-            );
-
-            let sast_id = format!("sub_sast_{idx}");
-            map.insert(
-                sast_id.clone(),
-                SproutedNodeInfo {
-                    id: sast_id,
-                    label: format!("sast analyzer\n[{file}]"),
-                    tier: "subagent".to_string(),
-                    target_path: Some(file.clone()),
-                    status: AgentStatus::Idle,
-                    details: format!("static vulnerability audit on {file}"),
-                    findings_count: 0,
-                    is_paused: false,
-                },
-            );
         }
+
+        // 3. Real Security Analysis Modules
+        map.insert(
+            "sub_secrets".to_string(),
+            SproutedNodeInfo {
+                id: "sub_secrets".to_string(),
+                label: "secret hunter\n[entropy miner]".to_string(),
+                tier: "subagent".to_string(),
+                target_path: None,
+                status: AgentStatus::Idle,
+                details: "scans commit history & source files for high-entropy secrets and API keys".to_string(),
+                findings_count: 0,
+                is_paused: false,
+            },
+        );
+
+        map.insert(
+            "sub_sast".to_string(),
+            SproutedNodeInfo {
+                id: "sub_sast".to_string(),
+                label: "sast analyzer\n[ast reachability]".to_string(),
+                tier: "subagent".to_string(),
+                target_path: None,
+                status: AgentStatus::Idle,
+                details: "static syntax & dataflow analysis from sources to sensitive sinks".to_string(),
+                findings_count: 0,
+                is_paused: false,
+            },
+        );
+
+        map.insert(
+            "sub_net".to_string(),
+            SproutedNodeInfo {
+                id: "sub_net".to_string(),
+                label: "network prober\n[surface linter]".to_string(),
+                tier: "subagent".to_string(),
+                target_path: None,
+                status: AgentStatus::Idle,
+                details: "detects 0.0.0.0 binds, CORS wildcards, and unencrypted transports".to_string(),
+                findings_count: 0,
+                is_paused: false,
+            },
+        );
+
+        map.insert(
+            "sub_sca".to_string(),
+            SproutedNodeInfo {
+                id: "sub_sca".to_string(),
+                label: "dependency guard\n[manifest sca]".to_string(),
+                tier: "subagent".to_string(),
+                target_path: None,
+                status: AgentStatus::Idle,
+                details: "audits package manifests and identifies phantom unpinned dependencies".to_string(),
+                findings_count: 0,
+                is_paused: false,
+            },
+        );
 
         // 3. Remediation, Verification & Gate
         map.insert(

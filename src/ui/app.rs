@@ -107,7 +107,7 @@ impl App {
             findings: Vec::new(),
             patches: Vec::new(),
             logs: Vec::new(),
-            chat_messages: vec![ChatMessage::System("constellation autonomous code defense harness initialized.".to_string())],
+            chat_messages: Vec::new(),
             chat_scroll: 0,
             skills,
             selected_matrix_row: 0,
@@ -159,13 +159,11 @@ impl App {
     }
 
     pub fn confirm_subagent_deployment(&mut self) {
-        self.chat_messages.push(ChatMessage::User("y (confirmed via click)".to_string()));
         self.awaiting_confirmation = false;
         let _ = self.cmd_tx.send(EngineCommand::ConfirmDeploy);
     }
 
     pub fn cancel_subagent_deployment(&mut self) {
-        self.chat_messages.push(ChatMessage::User("deployment cancelled by user.".to_string()));
         self.awaiting_confirmation = false;
         self.is_running = false;
     }
@@ -177,8 +175,6 @@ impl App {
                 node.is_paused = !node.is_paused;
                 let state_str = if node.is_paused { "paused" } else { "resumed" };
                 self.action_msg = Some(format!("node {} {state_str}", node.id));
-
-                self.chat_messages.push(ChatMessage::System(format!("node [{}] marked as {state_str}.", node.id)));
 
                 if node.is_paused {
                     let _ = self.cmd_tx.send(EngineCommand::PauseNode(node_id));
@@ -372,7 +368,6 @@ impl App {
                 self.nodes_info = AgentGraphBuilder::build_nodes_for_workspace(&self.target_dir);
                 self.flow = AgentGraphBuilder::build_sprouted_graph(&self.nodes_info).unwrap_or_else(|_| Flow::new());
                 self.mode = AppMode::Workspace;
-                self.trigger_audit();
                 false
             }
             KeyCode::Backspace => {
@@ -705,7 +700,6 @@ impl App {
                         self.nodes_info = AgentGraphBuilder::build_nodes_for_workspace(&self.target_dir);
                         self.flow = AgentGraphBuilder::build_sprouted_graph(&self.nodes_info).unwrap_or_else(|_| Flow::new());
                         self.mode = AppMode::Workspace;
-                        self.trigger_audit();
                     }
                 }
             }

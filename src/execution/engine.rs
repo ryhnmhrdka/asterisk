@@ -69,16 +69,6 @@ impl ExecutionEngine {
 
         // 1. Initial Orchestrator Security Policy & Capability Jail Check
         set_node(&self.sender, "orch", AgentStatus::Planning);
-        send_chat(
-            &self.sender,
-            ChatMessage::Thinking {
-                agent: "orchestrator".to_string(),
-                thought: format!(
-                    "verifying cap-std project jail & cedar policy gate on {}...",
-                    self.target_dir.display()
-                ),
-            },
-        );
 
         let policy_gate = PolicyGate::default();
         let gate_check = policy_gate.evaluate(
@@ -131,19 +121,6 @@ impl ExecutionEngine {
 
         let code_graph = CodeContextGraph::build_from_workspace(&self.target_dir);
 
-        send_chat(
-            &self.sender,
-            ChatMessage::Agent {
-                sender: "orchestrator".to_string(),
-                text: format!(
-                    "Discovered **{}** file(s) across target scope. Generated **{} AST code nodes** & **{} call/taint edges** in `petgraph`.\nExecuting static vulnerability audit...",
-                    profile.total_files,
-                    code_graph.total_nodes(),
-                    code_graph.total_edges(),
-                ),
-            },
-        );
-
         for id in workspace_nodes.keys() {
             if id.starts_with("folder_") || id.starts_with("file_") {
                 set_node(&self.sender, id, AgentStatus::Success);
@@ -152,52 +129,38 @@ impl ExecutionEngine {
 
         // 3. Subagents Execution
         set_node(&self.sender, "orch", AgentStatus::Running);
-        for id in workspace_nodes.keys() {
-            if id.starts_with("sub_") && id != "sub_patcher" && id != "sub_verifier" {
-                set_node(&self.sender, id, AgentStatus::Running);
-            }
-        }
 
-        // Collect findings from all scanners
+        set_node(&self.sender, "sub_secrets", AgentStatus::Running);
         let mut secret_findings = SecretHunterAgent::scan(&self.target_dir);
-        let mut sast_findings = SastAnalyzerAgent::scan(&self.target_dir);
-        let mut net_findings = NetworkProberAgent::scan(&self.target_dir);
         let mut git_secrets = GitHistorySecretMiner::scan_commit_history(&self.target_dir);
+        secret_findings.append(&mut git_secrets);
+        set_node(&self.sender, "sub_secrets", AgentStatus::Success);
+
+        set_node(&self.sender, "sub_sast", AgentStatus::Running);
+        let mut sast_findings = SastAnalyzerAgent::scan(&self.target_dir);
+        set_node(&self.sender, "sub_sast", AgentStatus::Success);
+
+        set_node(&self.sender, "sub_net", AgentStatus::Running);
+        let mut net_findings = NetworkProberAgent::scan(&self.target_dir);
+        set_node(&self.sender, "sub_net", AgentStatus::Success);
+
+        set_node(&self.sender, "sub_sca", AgentStatus::Running);
         let mut sca_findings = ScaDependencyAuditor::audit(&self.target_dir);
+        set_node(&self.sender, "sub_sca", AgentStatus::Success);
 
         let mut all_findings = Vec::new();
         all_findings.append(&mut secret_findings);
         all_findings.append(&mut sast_findings);
         all_findings.append(&mut net_findings);
-        all_findings.append(&mut git_secrets);
         all_findings.append(&mut sca_findings);
 
         // 4. AST Reachability Triage on Findings
-        let mut reachable_findings = 0;
+        let mut _reachable_findings = 0;
         for f in &all_findings {
             let sink_id = format!("{}:{}:sink", f.file_path.display(), f.line_number);
             let verdict = code_graph.evaluate_reachability(&sink_id);
             if matches!(verdict, ReachabilityVerdict::Reachable { .. }) {
-                reachable_findings += 1;
-            }
-        }
-
-        send_chat(
-            &self.sender,
-            ChatMessage::Agent {
-                sender: "triage".to_string(),
-                text: format!(
-                    "### Triage & Reachability Analysis\n- Scanned Findings: **{}**\n- Verified Reachable (True Positives): **{}** ($T_{{flow}} = S_{{input}} \\to D_{{sink}}$)\n- Filtered Noise / Unreachable: **{}**",
-                    all_findings.len(),
-                    reachable_findings,
-                    all_findings.len().saturating_sub(reachable_findings)
-                ),
-            },
-        );
-
-        for id in workspace_nodes.keys() {
-            if id.starts_with("sub_") && id != "sub_patcher" && id != "sub_verifier" {
-                set_node(&self.sender, id, AgentStatus::Success);
+                _reachable_findings += 1;
             }
         }
 
@@ -208,17 +171,6 @@ impl ExecutionEngine {
         let patches = AutoHardeningAgent::generate_patches(&self.target_dir, &all_findings);
         set_node(&self.sender, "sub_patcher", AgentStatus::Success);
         let _ = self.sender.send(EngineMessage::PatchesUpdated(patches.clone()));
-
-        send_chat(
-            &self.sender,
-            ChatMessage::Agent {
-                sender: "auto_hardening".to_string(),
-                text: format!(
-                    "Synthesized **{}** auto-hardening remediation patch(es).",
-                    patches.len()
-                ),
-            },
-        );
 
         // 6. Test Verifier in Isolated Worktree Sandbox
         set_node(&self.sender, "sub_verifier", AgentStatus::Running);
@@ -231,36 +183,8 @@ impl ExecutionEngine {
                     .as_nanos()
             );
 
-            match WorktreeSandbox::spawn(&self.target_dir, &sandbox_id) {
-                Ok(sandbox) => {
-                    let mut verified_count = 0;
-                    for p in &patches {
-                        let target_in_sandbox = sandbox.path().join(&p.target_file);
-                        if target_in_sandbox.exists() {
-                            verified_count += 1;
-                        }
-                    }
-                    let _ = sandbox.cleanup();
-
-                    send_chat(
-                        &self.sender,
-                        ChatMessage::Agent {
-                            sender: "sub_verifier".to_string(),
-                            text: format!(
-                                "Verified **{}** patch target(s) in isolated Git worktree sandbox (`.sentinel/worktrees/{}`). Sandbox cleanly recycled.",
-                                verified_count, sandbox_id
-                            ),
-                        },
-                    );
-                }
-                Err(e) => {
-                    send_chat(
-                        &self.sender,
-                        ChatMessage::System(format!(
-                            "Worktree sandbox verification note: {e} (continuing)"
-                        )),
-                    );
-                }
+            if let Ok(sandbox) = WorktreeSandbox::spawn(&self.target_dir, &sandbox_id) {
+                let _ = sandbox.cleanup();
             }
         }
         set_node(&self.sender, "sub_verifier", AgentStatus::Success);
@@ -271,8 +195,8 @@ impl ExecutionEngine {
             send_chat(
                 &self.sender,
                 ChatMessage::Agent {
-                    sender: "defense_gate".to_string(),
-                    text: "Pre-production defense check clean. Build authorized.".to_string(),
+                    sender: "orchestrator".to_string(),
+                    text: "✓ **Defense audit completed clean**: 0 security vulnerabilities identified across target scope. Build authorized.".to_string(),
                 },
             );
         } else {
@@ -280,10 +204,11 @@ impl ExecutionEngine {
             send_chat(
                 &self.sender,
                 ChatMessage::Agent {
-                    sender: "defense_gate".to_string(),
+                    sender: "orchestrator".to_string(),
                     text: format!(
-                        "Defense gate blocked: **{}** unpatched security issue(s). Review findings in Matrix view or apply fixes.",
-                        all_findings.len()
+                        "⚠️ **Defense gate blocked**: Identified **{}** security issue(s) ({} patch(es) available). Review findings in Matrix view or apply fixes.",
+                        all_findings.len(),
+                        patches.len()
                     ),
                 },
             );

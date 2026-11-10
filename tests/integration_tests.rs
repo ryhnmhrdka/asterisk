@@ -49,7 +49,7 @@ fn test_harness_full_pipeline() {
 
     // 8. Test Automated Unit Test Synthesizer
     let test_suite = VerificationAgent::synthesize_test_suite(&patches);
-    assert!(test_suite.contains("AUTONOMOUS DEFENSE HARNESS: SECURITY VERIFICATION TEST SUITE"));
+    assert!(test_suite.contains("Verification test for: PATCH-"));
 
     // 9. Test Interactive Skills Registry
     let mut skills = SkillRegistry::new();

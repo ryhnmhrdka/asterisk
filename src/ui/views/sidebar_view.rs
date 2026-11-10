@@ -69,7 +69,7 @@ impl SidebarView {
 
         let mut key_subagents: Vec<(String, String, String)> = nodes_info
             .values()
-            .filter(|n| n.tier == "subagent")
+            .filter(|n| n.tier == "subagent" && (n.status == AgentStatus::Running || n.is_paused || n.status == AgentStatus::Failed))
             .map(|n| {
                 let clean_label = n.label.lines().next().unwrap_or("module").to_string();
                 let clean_target = n.target_path.clone().unwrap_or_else(|| "-".to_string());
@@ -78,33 +78,41 @@ impl SidebarView {
             .collect();
 
         key_subagents.sort_by(|a, b| a.0.cmp(&b.0));
-        let tray_items: Vec<(&str, &str, &str)> = key_subagents
-            .iter()
-            .take(3)
-            .map(|(id, label, target)| (id.as_str(), label.as_str(), target.as_str()))
-            .collect();
 
         let tray_area = chunks[0];
         let mut row_y = tray_area.y + 1;
 
-        for (id, name, target) in tray_items {
-            let info = nodes_info.get(id);
-            let (status_icon, status_color) = match info.map(|n| (n.status, n.is_paused)) {
-                Some((_, true)) => ("⏸", Color::DarkGray),
-                Some((AgentStatus::Running, false)) => ("⠋", Color::White),
-                Some((AgentStatus::Success, false)) => ("✔", Color::Gray),
-                _ => ("○", Color::DarkGray),
-            };
-
-            let row_rect = Rect::new(tray_area.x, row_y, tray_area.width, 1);
-            targets.subagent_rows.push((id.to_string(), row_rect));
-
+        if key_subagents.is_empty() {
             tray_lines.push(Line::from(vec![
-                Span::styled(format!(" {status_icon} "), Style::default().fg(status_color)),
-                Span::styled(format!("{name:18}"), Style::default().fg(Color::White)),
-                Span::styled(format!(" {target}"), Style::default().fg(Color::Rgb(100, 100, 105))),
+                Span::styled("workspace idle", Style::default().fg(Color::Rgb(100, 100, 105))),
+                Span::styled("  │  press [space] or type /scan to execute security audit", Style::default().fg(Color::Rgb(70, 70, 75))),
             ]));
-            row_y += 1;
+        } else {
+            let tray_items: Vec<(&str, &str, &str)> = key_subagents
+                .iter()
+                .take(3)
+                .map(|(id, label, target)| (id.as_str(), label.as_str(), target.as_str()))
+                .collect();
+
+            for (id, name, target) in tray_items {
+                let info = nodes_info.get(id);
+                let (status_icon, status_color) = match info.map(|n| (n.status, n.is_paused)) {
+                    Some((_, true)) => ("⏸", Color::DarkGray),
+                    Some((AgentStatus::Running, false)) => ("⠋", Color::White),
+                    Some((AgentStatus::Failed, false)) => ("✖", Color::Red),
+                    _ => ("✔", Color::Gray),
+                };
+
+                let row_rect = Rect::new(tray_area.x, row_y, tray_area.width, 1);
+                targets.subagent_rows.push((id.to_string(), row_rect));
+
+                tray_lines.push(Line::from(vec![
+                    Span::styled(format!(" {status_icon} "), Style::default().fg(status_color)),
+                    Span::styled(format!("{name:18}"), Style::default().fg(Color::White)),
+                    Span::styled(format!(" {target}"), Style::default().fg(Color::Rgb(100, 100, 105))),
+                ]));
+                row_y += 1;
+            }
         }
 
         f.render_widget(Paragraph::new(tray_lines).block(tray_block), tray_area);

@@ -36,24 +36,60 @@ impl SidebarView {
         expanded_messages: &HashSet<usize>,
         has_patches: bool,
     ) -> SidebarClickTargets {
-        let input_text_len = prompt_input.chars().count();
-        let est_width = (area.width.saturating_sub(14)).max(15) as usize;
-        let text_lines = if input_text_len == 0 {
-            1
+        let est_input_width = area.width.saturating_sub(12);
+        let wrap_width = (est_input_width.saturating_sub(5) as usize).max(10);
+
+        let display_lines = if prompt_input.is_empty() {
+            if awaiting_confirmation {
+                vec![
+                    Line::from(vec![
+                        Span::styled(" > ", Style::default().fg(Color::Rgb(255, 200, 100)).add_modifier(Modifier::BOLD)),
+                        Span::styled("click [Execute] or type 'y'... ", Style::default().fg(Color::Rgb(110, 112, 120))),
+                    ]),
+                    Line::raw(""),
+                ]
+            } else {
+                vec![
+                    Line::from(vec![
+                        Span::styled(" > ", Style::default().fg(Color::Rgb(160, 200, 255)).add_modifier(Modifier::BOLD)),
+                        Span::styled("type instructions or slash commands... ", Style::default().fg(Color::Rgb(100, 102, 112))),
+                    ]),
+                    Line::raw(""),
+                ]
+            }
         } else {
-            ((input_text_len + 3) / est_width + 1).min(5)
+            let wrapped = wrap_multiline(prompt_input, wrap_width);
+            let total_wrapped = wrapped.len();
+            let mut lines = Vec::new();
+            for (i, line_text) in wrapped.iter().enumerate() {
+                let is_last = i == total_wrapped - 1;
+                let prefix = if i == 0 { " > " } else { "   " };
+                let mut spans = vec![
+                    Span::styled(prefix, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Span::styled(line_text.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                ];
+                if is_last {
+                    spans.push(Span::styled("█", Style::default().fg(Color::White)));
+                }
+                lines.push(Line::from(spans));
+            }
+            lines.push(Line::raw(""));
+            lines
         };
-        let input_box_height = (text_lines as u16).clamp(2, 4);
-        let prompt_section_height = input_box_height + 1; // +1 for hint line
+
+        let num_lines = display_lines.len();
+        let max_box_height = 6;
+        let input_box_height = (num_lines as u16).clamp(3, max_box_height);
+        let prompt_section_height = input_box_height + 1; // +1 for subtitle hint line
 
         let has_inspector = selected_node.is_some();
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(prompt_section_height),                           // 1. Input Prompt at TOP
-                Constraint::Min(8),                                                  // 2. Chatbot Message Stream
-                Constraint::Length(if awaiting_confirmation { 3 } else { 0 }),       // 3. Confirmation Buttons
-                Constraint::Length(if has_inspector { 4 } else { 0 }),               // 4. Module Inspector Box (only when selected)
+                Constraint::Min(8),                                                  // 0. Chatbot Message Stream (TOP)
+                Constraint::Length(if has_inspector { 4 } else { 0 }),               // 1. Module Inspector Box (only when selected)
+                Constraint::Length(if awaiting_confirmation { 3 } else { 0 }),       // 2. Confirmation Buttons
+                Constraint::Length(prompt_section_height),                           // 3. Input Prompt at BOTTOM
             ])
             .split(area);
 
@@ -76,84 +112,11 @@ impl SidebarView {
             .style(Style::default().bg(Color::Rgb(16, 17, 21)));
         f.render_widget(sidebar_bg, area);
 
-        // 1. Interactive Chatbot Input Bar AT TOP with Clickable [ Send ↵ ] Button
-        let prompt_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(input_box_height), // 1. Input Box & Send button
-                Constraint::Length(1),                // 2. Clean hotkey hint line
-            ])
-            .split(chunks[0]);
-
-        let input_split = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Min(10),
-                Constraint::Length(1),  // Quiet spacer
-                Constraint::Length(10), // Send button
-            ])
-            .split(prompt_chunks[0]);
-
-        let input_rect = input_split[0];
-        let send_rect = input_split[2];
-
-        let prompt_block = Block::default()
-            .style(Style::default().bg(Color::Rgb(24, 25, 31)));
-
-        let prompt_display = if prompt_input.is_empty() {
-            if awaiting_confirmation {
-                vec![
-                    Span::styled(" > ", Style::default().fg(Color::Rgb(255, 200, 100)).add_modifier(Modifier::BOLD)),
-                    Span::styled("click [Execute] or type 'y'... ", Style::default().fg(Color::Rgb(110, 112, 120))),
-                ]
-            } else {
-                vec![
-                    Span::styled(" > ", Style::default().fg(Color::Rgb(160, 200, 255)).add_modifier(Modifier::BOLD)),
-                    Span::styled("type instructions or slash commands... ", Style::default().fg(Color::Rgb(100, 102, 112))),
-                ]
-            }
-        } else {
-            vec![
-                Span::styled(" > ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(prompt_input, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled("█", Style::default().fg(Color::White)),
-            ]
-        };
-
-        let mut prompt_paragraph = Paragraph::new(Line::from(prompt_display))
-            .wrap(Wrap { trim: false })
-            .block(prompt_block);
-        if text_lines as u16 > input_box_height {
-            prompt_paragraph = prompt_paragraph.scroll(((text_lines as u16).saturating_sub(input_box_height), 0));
-        }
-        f.render_widget(prompt_paragraph, input_rect);
-
-        // [ Send ↵ ] Button (Sleek filled pill, NO borders)
-        let send_block = Block::default()
-            .style(Style::default().bg(Color::White));
-        let send_text = Line::from(Span::styled(" Send ↵ ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)));
-        f.render_widget(Paragraph::new(send_text).centered().block(send_block), send_rect);
-
-        targets.btn_send = Some(send_rect);
-
-        // Subtitle hint row beneath input box
-        let hint_line = Line::from(vec![
-            Span::raw("  "),
-            Span::styled("type ", Style::default().fg(Color::Rgb(85, 87, 95))),
-            Span::styled("/", Style::default().fg(Color::Rgb(140, 180, 255))),
-            Span::styled(" for commands  •  ", Style::default().fg(Color::Rgb(85, 87, 95))),
-            Span::styled("[Tab]", Style::default().fg(Color::Rgb(140, 142, 150))),
-            Span::styled(" complete  •  ", Style::default().fg(Color::Rgb(85, 87, 95))),
-            Span::styled("[↵]", Style::default().fg(Color::Rgb(140, 142, 150))),
-            Span::styled(" send", Style::default().fg(Color::Rgb(85, 87, 95))),
-        ]);
-        f.render_widget(Paragraph::new(hint_line), prompt_chunks[1]);
-
-        // 2. Chat Message Stream (Clean filled surface, NO borders)
+        // 1. Chat Message Stream (Clean filled surface, NO borders)
         let chat_block = Block::default()
             .style(Style::default().bg(Color::Rgb(16, 17, 21)));
 
-        let max_text_width = (chunks[1].width.saturating_sub(4)) as usize;
+        let max_text_width = (chunks[0].width.saturating_sub(4)) as usize;
         let mut all_chat_lines: Vec<(Line, Option<usize>)> = Vec::new();
 
         for (actual_idx, msg) in chat_messages.iter().enumerate() {
@@ -331,7 +294,7 @@ impl SidebarView {
             all_chat_lines.push((Line::raw(""), None));
         }
 
-        let visible_height = chunks[1].height as usize;
+        let visible_height = chunks[0].height as usize;
         let total_lines = all_chat_lines.len();
         let max_scroll = total_lines.saturating_sub(visible_height);
         let effective_scroll = chat_scroll.min(max_scroll);
@@ -344,8 +307,8 @@ impl SidebarView {
             for (idx, (line, expand_msg_idx)) in all_chat_lines[start_line..end_line].iter().enumerate() {
                 visible_lines.push(line.clone());
                 if let Some(msg_idx) = expand_msg_idx {
-                    let click_y = chunks[1].y + idx as u16;
-                    targets.user_msg_expand.push((*msg_idx, Rect::new(chunks[1].x, click_y, chunks[1].width, 1)));
+                    let click_y = chunks[0].y + idx as u16;
+                    targets.user_msg_expand.push((*msg_idx, Rect::new(chunks[0].x, click_y, chunks[0].width, 1)));
                 }
             }
         }
@@ -354,44 +317,14 @@ impl SidebarView {
             Paragraph::new(visible_lines)
                 .wrap(Wrap { trim: false })
                 .block(chat_block),
-            chunks[1],
+            chunks[0],
         );
 
-        // 3. Clickable Confirmation Buttons
-        if awaiting_confirmation {
-            let confirm_area = chunks[2];
-            let btn_split = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(50),
-                    Constraint::Percentage(50),
-                ])
-                .split(confirm_area);
-
-            let btn_conf_rect = btn_split[0];
-            let btn_canc_rect = btn_split[1];
-
-            let conf_block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::White));
-            let conf_text = Line::from(Span::styled(" [ ✓ Execute Review ] ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)));
-            f.render_widget(Paragraph::new(conf_text).centered().block(conf_block), btn_conf_rect);
-
-            let canc_block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Rgb(80, 80, 85)));
-            let canc_text = Line::from(Span::styled(" [ ✗ Cancel ] ", Style::default().fg(Color::Rgb(150, 150, 155))));
-            f.render_widget(Paragraph::new(canc_text).centered().block(canc_block), btn_canc_rect);
-
-            targets.btn_confirm = Some(btn_conf_rect);
-            targets.btn_cancel = Some(btn_canc_rect);
-        }
-
-        // 4. Module Inspector Box (Sleek filled surface, only shown when a node is selected)
+        // 2. Module Inspector Box (Sleek filled surface, only shown when a node is selected)
         if let Some(node) = selected_node {
             let node_block = Block::default()
                 .style(Style::default().bg(Color::Rgb(22, 23, 29)));
-            let node_area = chunks[3];
+            let node_area = chunks[1];
             let status_str = if node.is_paused { "paused" } else { node.status.as_str() };
             let p_rect = Rect::new(node_area.x + 2, node_area.y + 2, 14.min(node_area.width.saturating_sub(4)), 1);
             let a_rect = Rect::new(node_area.x + 18, node_area.y + 2, 18.min(node_area.width.saturating_sub(20)), 1);
@@ -440,13 +373,94 @@ impl SidebarView {
             targets.btn_apply = opt_apply;
         }
 
-        // 5. Command Autocomplete Suggestions Popup (Drops downwards beneath the prompt)
+        // 3. Clickable Confirmation Buttons
+        if awaiting_confirmation {
+            let confirm_area = chunks[2];
+            let btn_split = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(50),
+                    Constraint::Percentage(50),
+                ])
+                .split(confirm_area);
+
+            let btn_conf_rect = btn_split[0];
+            let btn_canc_rect = btn_split[1];
+
+            let conf_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::White));
+            let conf_text = Line::from(Span::styled(" [ ✓ Execute Review ] ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)));
+            f.render_widget(Paragraph::new(conf_text).centered().block(conf_block), btn_conf_rect);
+
+            let canc_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Rgb(80, 80, 85)));
+            let canc_text = Line::from(Span::styled(" [ ✗ Cancel ] ", Style::default().fg(Color::Rgb(150, 150, 155))));
+            f.render_widget(Paragraph::new(canc_text).centered().block(canc_block), btn_canc_rect);
+
+            targets.btn_confirm = Some(btn_conf_rect);
+            targets.btn_cancel = Some(btn_canc_rect);
+        }
+
+        // 4. Interactive Chatbot Input Bar AT BOTTOM with Clickable [ Send ↵ ] Button
+        let prompt_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(input_box_height), // 1. Input Box & Send button
+                Constraint::Length(1),                // 2. Clean hotkey hint line
+            ])
+            .split(chunks[3]);
+
+        let input_split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(10),
+                Constraint::Length(1),  // Quiet spacer
+                Constraint::Length(10), // Send button
+            ])
+            .split(prompt_chunks[0]);
+
+        let input_rect = input_split[0];
+        let send_rect = input_split[2];
+
+        let prompt_block = Block::default()
+            .style(Style::default().bg(Color::Rgb(24, 25, 31)));
+
+        let scroll_y = (num_lines as u16).saturating_sub(input_box_height);
+        let prompt_paragraph = Paragraph::new(display_lines)
+            .scroll((scroll_y, 0))
+            .block(prompt_block);
+        f.render_widget(prompt_paragraph, input_rect);
+
+        // [ Send ↵ ] Button (Sleek filled pill, NO borders)
+        let send_block = Block::default()
+            .style(Style::default().bg(Color::White));
+        let send_text = Line::from(Span::styled(" Send ↵ ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)));
+        f.render_widget(Paragraph::new(send_text).centered().block(send_block), send_rect);
+
+        targets.btn_send = Some(send_rect);
+
+        // Subtitle hint row beneath input box
+        let hint_line = Line::from(vec![
+            Span::raw("  "),
+            Span::styled("type ", Style::default().fg(Color::Rgb(85, 87, 95))),
+            Span::styled("/", Style::default().fg(Color::Rgb(140, 180, 255))),
+            Span::styled(" for commands  •  ", Style::default().fg(Color::Rgb(85, 87, 95))),
+            Span::styled("[Tab]", Style::default().fg(Color::Rgb(140, 142, 150))),
+            Span::styled(" complete  •  ", Style::default().fg(Color::Rgb(85, 87, 95))),
+            Span::styled("[↵]", Style::default().fg(Color::Rgb(140, 142, 150))),
+            Span::styled(" send", Style::default().fg(Color::Rgb(85, 87, 95))),
+        ]);
+        f.render_widget(Paragraph::new(hint_line), prompt_chunks[1]);
+
+        // 5. Command Autocomplete Suggestions Popup (Floats above prompt at bottom)
         let suggestions = get_matching_commands(prompt_input);
         if !suggestions.is_empty() {
             let visible_count = suggestions.len().min(6);
             let popup_height = (visible_count + 2) as u16;
             let popup_width = input_rect.width + send_rect.width + 1;
-            let popup_y = input_rect.y + input_rect.height;
+            let popup_y = input_rect.y.saturating_sub(popup_height);
             let popup_rect = Rect::new(input_rect.x, popup_y, popup_width, popup_height);
 
             f.render_widget(Clear, popup_rect);

@@ -30,75 +30,73 @@ $\text{Asterisk} = \text{Multi-Model Router} + \underbrace{(\text{GraphCore} + \
 
 ## 2. Spesifikasi Tech Stack (Ekosistem Rust)
 
-Seluruh kode sumber sistem ditulis dalam bahasa **Rust (Edition 2024, MSRV 1.82+)** dengan rincian pustaka (*crates*) sebagai berikut:
+Seluruh kode sumber sistem ditulis dalam bahasa **Rust (Edition 2024, MSRV 1.82+)** dengan arsitektur **Single-Crate Modular Monolith** dan rincian pustaka (*crates*) sebagai berikut:
 
 | Kategori Komponen               | Crate Utama                           | Versi / Fitur Kunci                               | Alasan Pemilihan & Peran Teknis                                                                                                          |
 | ------------------------------- | ------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| **TUI Rendering Engine**        | `ratatui` + `crossterm`               | `ratatui >= 0.29`                                 | *Immediate-mode terminal rendering* dengan *double-buffering diff* yang sangat hemat CPU dan memori.                                     |
-| **TUI Infinite Whiteboard**     | `rataflow` + `tui-overlay`            | *Sugiyama Layout, Braille Edges*                  | Menyediakan kanvas *node-graph* interaktif di terminal (mendukung *pan*, *zoom*, *drag node* dengan *mouse*, dan *MiniMap*).             |
-| **Async Runtime & Parallelism** | `tokio` + `rayon`                     | `tokio (full)`, `rayon`                           | `tokio` mengelola I/O jaringan LLM dan *event loop* TUI; `rayon` memparalelkan parsing AST ribuan berkas di seluruh *core* CPU.          |
-| **Code Context Graph & AST**    | `tree-sitter` + `petgraph`            | Multi-grammar (JS/TS, Py, Go, Java, Kotlin, Rust) | Membedah kode sumber menjadi *Abstract Syntax Tree* (AST) dan membangun graf berarah (*Call Graph* & *Taint Flow*) di memori.            |
-| **File & Git Operations**       | `ignore` + `git2` + `similar`         | *libgit2 binding*, *diff engine*                  | Menyapu pohon direktori dengan menghormati `.gitignore`, membuat **Git Worktree** terisolasi, menyapu `--git-logs`, dan merender *diff*. |
-| **MCP & Agent Protocol**        | `model-context-protocol`              | JSON-RPC 2.0, `#[mcp_tool]`                       | Standarisasi pemanggilan alat oleh *Orchestrator* dan *Sub-Agent* dengan validasi skema JSON otomatis.                                   |
-| **Multi-Model AI Gateway**      | `reqwest` + `eventsource-stream`      | HTTP/2, SSE Streaming                             | Menghubungkan *Smart Router* ke model lokal (**Ollama**, **LM Studio**) maupun API Cloud (Claude, OpenAI, Gemini, DeepSeek).             |
-| **Embedded Storage**            | `rusqlite` (bundled)                  | Mode `WAL`, FTS5                                  | Menyimpan graf kode, status sesi, dan hasil audit dalam satu berkas `.asterisk/state.sqlite` tanpa instalasi server DB eksternal.        |
-| **Serialization & Config**      | `serde` + `serde_json` + `serde_yaml` | Derive macros                                     | Mem-parsing *frontmatter* YAML pada `.skill.md`, membaca `SECURITY.md`, dan mengelola aliran *Async JSONL Mailbox*.                      |
-| **Telemetry & Audit Log**       | `tracing` + `opentelemetry`           | JSONL Exporter                                    | Mencatat seluruh jejak keputusan agen dan pemanggilan alat secara *append-only* untuk kepatuhan audit.                                   |
+| **TUI Rendering Engine**        | `ratatui` + `crossterm`               | `ratatui >= 0.30`, `crossterm >= 0.29`            | *Immediate-mode terminal rendering* dengan *double-buffering diff* yang sangat hemat CPU dan memori.                                     |
+| **TUI Infinite Whiteboard**     | `rataflow`                            | *Sugiyama Layout, Step/Braille Edges*             | Menyediakan kanvas *node-graph* DAG interaktif di terminal (mendukung *pan*, *zoom*, dan pembaruan status *live*).                       |
+| **Rich Terminal Markdown & Math** | `pulldown-cmark` + Custom LaTeX     | `pulldown-cmark >= 0.13`                          | Merender penjelasan agen, laporan keamanan Markdown, dan formula matematika LaTeX langsung di panel TUI.                                 |
+| **Capability Jail & Policy Gate** | `cap-std` + `cedar-policy`          | `cap-std >= 4.0`, `cedar-policy >= 4.14`          | `cap-std` mengisolasi akses berkas berbasis kapabilitas OS (`ProjectJail`); `cedar-policy` mengevaluasi izin formal (`PolicyGate`).      |
+| **Async Runtime & Concurrency** | `tokio`                               | `tokio >= 1.54 (full)`, `mpsc` channels           | Mengelola I/O jaringan LLM, komunikasi asinkron antar-komponen, dan *event loop* TUI 60 FPS tanpa pemblokiran.                           |
+| **Code Context Graph & AST**    | `ast-grep-core` + `tree-sitter` + `petgraph` | Multi-language AST & `DiGraph`             | Membedah kode sumber menjadi *Abstract Syntax Tree* (AST) dan membangun graf berarah (*Call Graph* & *Taint Flow*) di memori.            |
+| **File, Git & Secret Entropy**  | `walkdir` + `git2` + `similar` + `entropy` | *libgit2*, *unified diff*, *Shannon entropy* | Menyapu pohon direktori, membuat **Git Worktree** terisolasi, menyapu riwayat `--git-logs` dengan entropi Shannon, dan merender *diff*.  |
+| **Multi-Model AI & Tool Harness** | `rig-core` (`rig`)                  | `rig-core >= 0.44 (reqwest)`, `PortableTool`      | Menghubungkan `SecurityAgentHub` ke penyedia lokal (**Ollama**) maupun API Cloud (**Claude, OpenAI, Gemini, DeepSeek, Custom URL**).     |
+| **Embedded Storage**            | `rusqlite` (bundled) + `blake3`       | Mode `WAL`, Incremental Hash                      | Menyimpan graf kode, status sesi, dan hasil audit dalam satu berkas `.asterisk/state.sqlite` tanpa instalasi server DB eksternal.        |
+| **Serialization & Config**      | `serde` + `serde_json` + `serde_yaml` | Derive macros                                     | Mem-parsing *frontmatter* YAML pada `.skill.md`, membaca `SECURITY.md`, dan menyimpan konfigurasi serta log JSONL (`audit_trail.jsonl`). |
 
 ***
 
 ## 3. Arsitektur Sistem & Diagram Alir
 
-### 3.1 Diagram Arsitektur Tingkat Tinggi (*High-Level Component Architecture*)
+### 3.1 Diagram Arsitektur Tingkat Tinggi (*Single-Crate Modular Monolith Architecture*)
 
 ```markdown
 +===================================================================================================+
-|                             ASTERISK SINGLE BINARY (RUST)                                 |
+|                        ASTERISK SINGLE STATIC BINARY (MODULAR MONOLITH)                           |
 |                                                                                                   |
 |  +---------------------------------------------------------------------------------------------+  |
-|  | [LAPISAN 3: PRESENTATION & STEERING LAYER] (crate: asterisk-tui | Thread Utama @ 60 FPS)     |  |
+|  | [LAPISAN 3: PRESENTATION & STEERING LAYER] (mod: src/ui | Thread Utama @ 60 FPS)            |  |
 |  |                                                                                             |  |
 |  |  +---------------------------------------+   +-------------------------------------------+  |  |
-|  |  | Rataflow Interactive Whiteboard       |   | Split-Pane Inspector & Diff Viewer        |  |  |
-|  |  | • Node Orchestrator & Organic Agents  |   | • Side-by-Side Git Diff (Before vs After) |  |  |
-|  |  | • Code Context Call-Graph View        |   | • Live Security Unit-Test Runner Output   |  |  |
-|  |  | • Dynamic Decision Tree & Braille Edge|   | • Auditable Triage Reasoning Inspector    |  |  |
+|  |  | Panel Kiri (50%): AI Assistant & REPL |   | Panel Kanan (50%): 5-Tab Defense Workspace|  |  |
+|  |  | • Rich Markdown & LaTeX Renderer      |   | • [1 Graph] Rataflow DAG Whiteboard Canvas|  |  |
+|  |  | • Slash-Command Autocomplete Popup    |   | • [2 Findings] Vulnerability Matrix Table |  |  |
+|  |  | • Interactive Provider/Model/Key Modal|   | • [3 Patches] Unified Diff ([a]pply/[r]ev)|  |  |
+|  |  | • Live Agent Thinking & Tool Stream   |   | • [4 Execution] Logs  • [5 Skills] Status |  |  |
 |  |  +---------------------------------------+   +-------------------------------------------+  |  |
-|  |  +---------------------------------------------------------------------------------------+  |  |
-|  |  | Steerable Slash-Command REPL (/init-sec, /audit, /reachability, /patch, /hotfix, dll) |  |  |
-|  |  +---------------------------------------------------------------------------------------+  |  |
 |  +----------------------------------------------+----------------------------------------------+  |
 |                                                 |                                                 |
-|                     UiActionChannel (mpsc)      |      TelemetryBroadcast (broadcast)             |
+|                      EngineCommand (mpsc)       |      EngineMessage (mpsc)                       |
 |                                                 v                                                 |
 |  +---------------------------------------------------------------------------------------------+  |
-|  | [LAPISAN 2: HARNESS GOVERNANCE & ISOLATION KERNEL] (crate: asterisk-core | Tokio Runtime)   |  |
+|  | [LAPISAN 2: HARNESS GOVERNANCE & ISOLATION KERNEL] (mod: src/core & src/execution)          |  |
 |  |                                                                                             |  |
 |  |  +-----------------------------+  +-----------------------------+  +---------------------+  |  |
-|  |  | Pre-Execution Policy Gate   |  | Background Sec Classifier   |  | Workspace Isolator  |  |  |
-|  |  | • Hierarki: Deny->Ask->Allow|  | • Anti-Prompt Injection     |  | • Git Worktree Pool |  |  |
-|  |  | • Session Scope Lock        |  | • Tool Call Schema Validator|  | • Snapshot Rewind   |  |  |
+|  |  | Cedar PolicyGate            |  | Capability ProjectJail      |  | WorktreeSandbox     |  |  |
+|  |  | • AWS cedar-policy Engine   |  | • cap-std Ambient Authority |  | • git2 Worktree Pool|  |  |
+|  |  | • Allow / AskUser / Deny    |  | • Strict Path Confinement   |  | • Checkpoint Rewind |  |  |
 |  |  +-----------------------------+  +-----------------------------+  +---------------------+  |  |
 |  |  +-----------------------------------------------+  +------------------------------------+  |  |
-|  |  | Async JSONL Mailbox Router (Inter-Agent Bus)  |  | Immutable Audit Trail & SafeOutput |  |  |
+|  |  | ExecutionEngine & Async Event Bus             |  | SQLite WAL Store & Audit JSONL     |  |  |
 |  |  +-----------------------------------------------+  +------------------------------------+  |  |
 |  +----------------------------------------------+----------------------------------------------+  |
 |                                                 |                                                 |
 |                                                 v                                                 |
 |  +---------------------------------------------------------------------------------------------+  |
-|  | [LAPISAN 1: CORE INTELLIGENCE & DETERMINISTIC ENGINES] (crates: asterisk-agents & engines)  |  |
+|  | [LAPISAN 1: CORE INTELLIGENCE & DETERMINISTIC ENGINES] (mod: orchestrator, subagents, core) |  |
 |  |                                                                                             |  |
 |  |  +---------------------------------------+   +-------------------------------------------+  |  |
-|  |  | Orchestrator & Organic Spawner        |   | Multi-Model Smart Router (AI Gateway)     |  |  |
-|  |  | • Threat Modeling & Task Graph Builder|   | • Local Offline: Ollama / LM Studio       |  |  |
-|  |  | • Dynamic Sub-Agent Instantiation     |   | • Cloud API: Claude / GPT / Gemini / GLM  |  |  |
-|  |  | • 3-Tier Skill Registry & Synthesizer |   | • Context Compaction Middleware (75% Cap) |  |  |
+|  |  | Orchestrator & StrategyPlanner        |   | SecurityAgentHub (rig-core AI Gateway)    |  |  |
+|  |  | • WorkspaceScanner & Threat Modeler   |   | • Local Offline: Ollama / Custom Endpoint |  |  |
+|  |  | • Dynamic Rataflow AgentGraphBuilder  |   | • Cloud API: Claude / OpenAI / Gemini / DS|  |  |
+|  |  | • 3-Tier SkillRegistry (.skill.md)    |   | • PortableTool Bridge (rig_tools.rs)      |  |  |
 |  |  +---------------------------------------+   +-------------------------------------------+  |  |
 |  |                                                                                             |  |
 |  |  +---------------------------------------------------------------------------------------+  |  |
-|  |  | Deterministic MCP Core Engine Server (#[mcp_server])                                  |  |  |
-|  |  |  [1. GraphCore AST]   [2. Tri-Stage SAST]   [3. SCA Reachability & Phantom Detector]  |  |  |
-|  |  |  [4. Pre-Install Malware & Git-Secret]  [5. APK & Dockerfile Guard]  [6. Hotfix Gen]  |  |  |
+|  |  | Deterministic Security Engines & Specialist Sub-Agents                                |  |  |
+|  |  |  [1. CodeContextGraph AST]  [2. SastAnalyzer]  [3. ScaDependencyAuditor (Phantom Dep)]|  |  |
+|  |  |  [4. GitHistorySecretMiner & SecretHunter]  [5. Network/APK/Malware]  [6. Patcher/Ver]|  |  |
 |  |  +---------------------------------------------------------------------------------------+  |  |
 |  +----------------------------------------------+----------------------------------------------+  |
 +=================================================|=================================================+
@@ -491,18 +489,21 @@ Untuk memastikan kanvas *Whiteboard* di terminal berjalan semulus aplikasi grafi
 3. **Tata Letak Hirarki Otomatis (*****Sugiyama Layered Graph Layout*****):**
    Ketika *Orchestrator* melahirkan beberapa *Sub-Agent* secara organik, algoritma *Sugiyama* secara otomatis menghitung posisi koordinat $(X, Y)$ setiap *node* baru agar panah hubungan antar-agen tidak saling bertumpuk.
 
-### 7.2 Tata Letak Layar & Peta Navigasi TUI (*Keybindings & Mouse Controls*)
+### 7.2 Tata Letak Layar 50/50 Dual-Pane & Peta Navigasi TUI (*Keybindings & Mouse Controls*)
 
-| Tombol / Aksi Mouse                                          | Konteks Panel              | Aksi Sistem                                                                                                      |
-| ------------------------------------------------------------ | -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **`Mouse Drag`****&#x20;/&#x20;****`h, j, k, l`**            | Panel 1: Whiteboard Canvas | Menggeser kamera (*panning*) melintasi kanvas tanpa batas.                                                       |
-| **`Mouse Scroll`****&#x20;/&#x20;****`+`****,&#x20;****`-`** | Panel 1: Whiteboard Canvas | Memperbesar atau memperkecil tampilan detail *node* di kanvas (*Zoom Level*).                                    |
-| **`Klik Kiri`****&#x20;/&#x20;****`Tab`**                    | Panel 1: Whiteboard Canvas | Memilih *node* Sub-Agent atau simpul fungsi kode dan menampilkan detailnya di Panel 2 (*Inspector*).             |
-| **`Space`**                                                  | Pada *Node* Agen Terpilih  | Menjeda (*Pause*) atau melanjutkan (*Resume*) eksekusi *Sub-Agent* tersebut secara instan.                       |
-| **`s`**                                                      | Pada *Node* Agen Terpilih  | Membuka kotak dialog *Steer* untuk menyuntikkan petunjuk atau fakta baru ke dalam memori *Sub-Agent*.            |
-| **`Enter`**                                                  | Pada *Node* Patch Hijau    | Membuka jendela konfirmasi untuk menerapkan (*merge*) kode tambalan dari *Git Worktree* ke proyek utama.         |
-| **`Esc`****&#x20;+&#x20;****`Esc`****&#x20;(2x Cepat)**      | Global TUI                 | **Reversible Checkpoint Rewind:** Membatalkan perubahan terakhir dan mengembalikan *working tree* ke titik aman. |
-| **`/`**                                                      | Global TUI                 | Memfokuskan kursor langsung ke Panel 3 (*Slash Command REPL*) dengan menu *autocompletion*.                      |
+Antarmuka dibagi menjadi **Panel Kiri (50% — AI Assistant & Slash REPL)** dan **Panel Kanan (50% — 5-Tab Defense Workspace: `1:Graph`, `2:Findings`, `3:Patches`, `4:Execution`, `5:Skills`)**:
+
+| Tombol / Aksi Mouse                                          | Konteks Panel                    | Aksi Sistem                                                                                                      |
+| ------------------------------------------------------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| **`Tab`****&#x20;/&#x20;****`1`–`5`****&#x20;/&#x20;****`F1`–`F5`** | Panel Kanan: 5-Tab Workspace     | Berpindah antar-tab tampilan kerja (`1:Graph`, `2:Findings`, `3:Patches`, `4:Execution`, `5:Skills`).            |
+| **`Mouse Drag`****&#x20;/&#x20;****`h, j, k, l`**            | Tab 1: Rataflow Graph Canvas     | Menggeser kamera (*panning*) melintasi kanvas *node-graph* atau menavigasi baris pada tabel *Findings/Patches*.  |
+| **`Mouse Scroll`****&#x20;/&#x20;****`+`****,&#x20;****`-`** | Tab 1 / Panel Kiri Chat          | Memperbesar/memperkecil tampilan kanvas (*Zoom*) atau menggulir riwayat percakapan secara independen.            |
+| **`Space`**                                                  | Global Workspace / Node Terpilih | Memicu siklus audit otonom baru atau menjeda (*Pause*) / melanjutkan (*Resume*) eksekusi *Sub-Agent*.            |
+| **`a`**                                                      | Tab 3: Patches Inspector         | **Apply Hardening Patch:** Menerapkan kode tambalan yang sudah diverifikasi langsung ke berkas sumber.           |
+| **`r`**                                                      | Tab 3: Patches Inspector         | **Rollback Patch:** Mengembalikan berkas sumber ke kondisi semula sebelum tambalan diterapkan.                   |
+| **`e`**                                                      | Global Workspace                 | **Export Report:** Mengekspor laporan pertahanan keamanan ke format Markdown/HTML/JSON.                          |
+| **`Esc`****&#x20;+&#x20;****`Esc`****&#x20;(2x Cepat)**      | Global TUI                       | **Reversible Checkpoint Rewind:** Membatalkan perubahan terakhir dan mengembalikan *working tree* ke titik aman. |
+| **`/`**                                                      | Panel Kiri: Slash-Command REPL   | Memunculkan *popup autocompletion* untuk `/scan`, `/init-sec`, `/config`, `/provider`, `/model`, `/key`, dll.    |
 
 ***
 
@@ -510,34 +511,36 @@ Untuk memastikan kanvas *Whiteboard* di terminal berjalan semulus aplikasi grafi
 
 ### 8.1 Standar Keamanan Internal (*Hardened Harness Security*)
 
-1. **Kepatuhan Mutlak Pipa Izin (****`Deny`****&#x20;****$\to$****&#x20;****`Ask`****&#x20;****$\to$****&#x20;****`Allow`****):**
-   Setiap pemanggilan fungsi MCP melewati validator `PolicyGate::evaluate(&ToolCall)`. Aturan `Deny` (seperti larangan memodifikasi berkas di luar direktori proyek, larangan mengeksekusi biner sistem berbahaya, atau larangan membuka soket jaringan keluar saat uji unit lokal) bersifat *hardcoded* di dalam Rust dan **fail-closed**.
-2. **Kanonikalisasi Jalur Berkas (*****Path Traversal Prevention*****):**
-   Seluruh alat baca/tulis berkas wajib memanggil `std::fs::canonicalize(target_path)` dan memverifikasi `canonical_path.starts_with(&project_root_canonical)`. Serangan *symlink* atau `../` yang mengarah ke luar folder proyek otomatis ditolak sebelum menyentuh diska.
-3. **Isolasi Konteks dari&#x20;*****Indirect Prompt Injection*****:**
-   Komentar atau string di dalam *source code* proyek target diperlakukan sebagai **Untrusted Data**. *Background Security Classifier* memeriksa validitas rencana pemanggilan alat hanya dengan mencocokkan perintah asli pengguna dan skema parameter alat, tanpa membaca teks alasan (*chain-of-thought*) dari *Sub-Agent* yang berpotensi tercemar.
+1. **Otorisasi Kebijakan Formal Berbasis AWS Cedar (`PolicyGate` — `Deny` $\to$ `AskUser` $\to$ `Allow`):**
+   Setiap pemanggilan alat melewati validator `PolicyGate::evaluate(agent_role, action, resource_path)` (`src/core/policy.rs`) yang ditenagai oleh mesin kebijakan formal **`cedar-policy`**. Aturan `permit` dan `forbid` dievaluasi secara deterministik (*fail-closed*): agen pembaca hanya diizinkan membaca di dalam *workspace*, penulisan tambalan dikunci hanya untuk `PatcherAgent` di dalam *sandbox*, dan eksekusi perintah *shell* atau modifikasi kode produksi memicu gerbang konfirmasi `GateDecision::AskUser` atau `GateDecision::Deny`.
+2. **Isolasi Sistem Berkas Berbasis Kapabilitas OS (`ProjectJail` via `cap-std`):**
+   Seluruh operasi baca/tulis berkas oleh agen dibungkus di dalam `ProjectJail` (`src/core/jail.rs`) menggunakan pustaka **`cap-std`** (`Dir::open_ambient_dir`). Otoritas akses berkas global dicabut pada tingkat *handle* sistem operasi dan dikombinasikan dengan kanonikalisasi jalur (`std::fs::canonicalize`) serta pemblokiran komponen `ParentDir` (`..`), sehingga upaya *path traversal* atau *symlink escape* ke luar direktori proyek gagal secara mutlak.
+3. **Isolasi Konteks dari *Indirect Prompt Injection*:**
+   Komentar atau string di dalam *source code* proyek target diperlakukan sebagai **Untrusted Data**. Rencana pemanggilan alat divalidasi terhadap skema `PortableTool` (`src/core/rig_tools.rs`) dan kebijakan Cedar sebelum dieksekusi.
 
 ### 8.2 Target Performa & Anggaran Sumber Daya (*Performance Budgets*)
 
 * **Waktu Mulai Dingin (*****Cold Start Time*****):** $\le 50 \text{ ms}$ hingga antarmuka TUI tampil penuh di layar terminal.
 * **Konsumsi Memori (RAM):** $\le 65 \text{ MB}$ saat *idle*; $\le 250 \text{ MB}$ saat memproses proyek skala menengah (100.000 baris kode).
-* **Kecepatan Pemetaan&#x20;****`GraphCore`****&#x20;Awal (****`/init-sec`****):** $\ge 15.000 \text{ baris kode/detik}$ dengan pemindaian multi-inti `rayon`.
+* **Kecepatan Pemetaan&#x20;****`GraphCore`****&#x20;Awal (****`/init-sec`****):** $\ge 15.000 \text{ baris kode/detik}$ dengan pemindaian AST terindeks.
 * **Latensi Audit Inkremental (****`/audit --diff-scope=local`****):** $\le 12 \text{ detik}$ dari perintah dijalankan hingga hasil *Triage* tampil di kanvas TUI.
 * **Batas Kompresi Konteks Otomatis:** Middleware router otomatis memicu peringkasan konteks (*Context Compaction*) ketika pemakaian token *Sub-Agent* menyentuh **75% kapasitas jendela konteks model**, menjaga agar agen tidak pernah mengalami degradasi penalaran (*context rot*).
 
 ***
 
-## 9. Struktur Repositori (Cargo Workspace) & Strategi Deployment
+## 9. Struktur Repositori (Single-Crate Modular Monolith) & Strategi Deployment
 
-### 9.1 Tata Letak Cargo Workspace (`Cargo.toml`)
+### 9.1 Tata Letak Modular Monolith (`src/`)
+
+Untuk meminimalkan *overhead* waktu kompilasi antar-crate dan menghasilkan satu berkas biner statis secara efisien, seluruh modul diorganisasikan ke dalam arsitektur **Single-Crate Modular Monolith** dengan pemisahan lapisan tanggung jawab yang tegas:
 
 ```
 asterisk/
-├── Cargo.toml                         # Konfigurasi Workspace & profil rilis LTO
+├── Cargo.toml                         # Konfigurasi paket tunggal & profil rilis LTO
 ├── Cargo.lock
-├── SECURITY.md                        # Dogfooding: Aturan keamanan internal Asterisk
+├── SECURITY.md                        # Dogfooding: Aturan konteks keamanan internal Asterisk
 ├── assets/
-│   └── builtin_skills/                # Tier-1 Default Skills (.skill.md) yang di-embed ke binary
+│   └── builtin_skills/                # Tier-1 Default Skills (.skill.md) dengan YAML frontmatter
 │       ├── owasp-sast-triage.skill.md
 │       ├── sca-reachability-triage.skill.md
 │       ├── apk-manifest-guard.skill.md
@@ -546,74 +549,87 @@ asterisk/
 │       ├── container-code-reachability.skill.md
 │       ├── contextual-code-hardening.skill.md
 │       └── vendor-hotfix-backport.skill.md
-└── crates/
-    ├── asterisk-cli/                  # Crate Binary Utama (Entrypoint CLI & inisialisasi sistem)
-    │   └── src/main.rs
-    ├── asterisk-tui/                  # Lapisan 3: Antarmuka Full-TUI & Rataflow Whiteboard
-    │   └── src/
-    │       ├── lib.rs
-    │       ├── app.rs                 # Loop utama 60 FPS, Mouse Drain, & Split-Pane Manager
-    │       ├── whiteboard_canvas.rs   # Widget Rataflow, Sugiyama Auto-Layout, & Braille Edges
-    │       ├── inspector_modal.rs     # Panel Diff Viewer, Triage Reasoning, & Unit-Test Log
-    │       └── slash_repl.rs          # Parser & Autocomplete untuk /init-sec, /audit, /patch, dll.
-    ├── asterisk-core/                 # Lapisan 2: Kernel Harness, Policy Gate, SQLite & Worktree
-    │   └── src/
-    │       ├── lib.rs
-    │       ├── policy_gate.rs         # Evaluasi Deny -> Ask -> Allow & Path Canonicalization
-    │       ├── bg_classifier.rs       # Background Security Classifier (Anti-Prompt Injection)
-    │       ├── worktree_sandbox.rs    # Manajemen Git Worktree & Checkpoint Rewind (git2)
-    │       ├── mailbox.rs             # Asynchronous JSONL Mailbox Router
-    │       └── storage.rs             # Koneksi SQLite WAL & OpenTelemetry Audit Exporter
-    ├── asterisk-graph/                # Modul Mesin 1 & 3: AST Parser, Call Graph & Reachability
-    │   └── src/
-    │       ├── lib.rs
-    │       ├── ast_parser.rs          # Multi-language tree-sitter + rayon parallel scanner
-    │       ├── call_graph.rs          # Konstruksi DiGraph petgraph & Taint Flow Tracker
-    │       └── reachability.rs        # Function-level CVE Reachability & Phantom Dep Detector
-    ├── asterisk-scanners/             # Modul Mesin 4, 5 & 6: Malware, Secret, APK & Hotfix
-    │   └── src/
-    │       ├── lib.rs
-    │       ├── malware_shield.rs      # Typosquatting & Pre-install Script Heuristic Analyzer
-    │       ├── git_secrets.rs         # Git Revwalk (--git-logs) Secret & Entropy Scanner
-    │       ├── apk_container.rs       # AndroidManifest.xml & Dockerfile Reachability Guard
-    │       └── hotfix_patcher.rs      # Generator .patch untuk Local Dependency Backport
-    └── asterisk-agents/               # Lapisan 1: Orchestrator, Organic Spawner, Skills & Router
-        └── src/
-            ├── lib.rs
-            ├── orchestrator.rs        # Threat Modeling, Task Dependency Graph & Skill Synthesizer
-            ├── spawner.rs             # Dynamic Sub-Agent Actor Spawner (Clean Context Window)
-            ├── skill_registry.rs      # Pengelola 3-Tier Skills & Progressive YAML Loader
-            ├── smart_router.rs        # Konektor Variatif Providers (Ollama, LM Studio, Cloud API)
-            └── mcp_server.rs          # Eksposur seluruh modul mesin via makro #[mcp_tool]
+├── tests/
+│   ├── integration_tests.rs           # Pengujian integrasi pipeline End-to-End & UI
+│   └── fixtures/vulnerable_repo/      # Repositori uji berisi sampel celah keamanan
+└── src/
+    ├── main.rs                        # Entrypoint CLI (--ci, --install-hook, --diff-scope) & TUI loop
+    ├── lib.rs                         # Ekspor modul publik untuk pengujian integrasi
+    ├── types.rs                       # Kontrak tipe data lintas modul (Finding, Patch, Provider, Cmd)
+    ├── core/                          # Lapisan Kernel Harness, Isolasi, Storage & Mesin Inti
+    │   ├── mod.rs
+    │   ├── agent.rs                   # SecurityAgentHub: Konektor Multi-Model LLM berbasis rig-core
+    │   ├── config.rs                  # Manajemen konfigurasi provider & kredensial (.asterisk/)
+    │   ├── git_secrets.rs             # GitHistorySecretMiner: git2::Revwalk & Shannon Entropy
+    │   ├── graph.rs                   # CodeContextGraph: AST parser, Call Graph & BFS Reachability
+    │   ├── jail.rs                    # ProjectJail: Isolasi filesystem berbasis kapabilitas cap-std
+    │   ├── policy.rs                  # PolicyGate: Mesin otorisasi formal berbasis cedar-policy
+    │   ├── rig_tools.rs               # Implementasi PortableTool untuk pemanggilan alat terisolasi
+    │   ├── sandbox.rs                 # WorktreeSandbox: Manajemen Git Worktree (.asterisk/worktrees)
+    │   ├── sca.rs                     # ScaDependencyAuditor: Deteksi Phantom Dep & audit manifest
+    │   ├── security_md.rs             # Parser aturan konteks arsitektur dari berkas SECURITY.md
+    │   └── storage.rs                 # StateStore SQLite WAL (.asterisk/state.sqlite) & Audit JSONL
+    ├── orchestrator/                  # Pemetaan Workspace, Perencanaan Strategi & Graf Agen
+    │   ├── mod.rs
+    │   ├── graph.rs                   # AgentGraphBuilder: Konstruksi node & edge DAG Rataflow
+    │   ├── planner.rs                 # StrategyPlanner: Penyusun fase matriks pertahanan
+    │   └── workspace.rs               # WorkspaceScanner: Deteksi bahasa, framework, Docker & APK
+    ├── subagents/                     # Koloni Sub-Agent Spesialis Deteksi, Remediasi & Verifikasi
+    │   ├── mod.rs
+    │   ├── sast.rs                    # SastAnalyzerAgent: Deteksi celah injeksi & alur data
+    │   ├── secrets.rs                 # SecretHunterAgent: Pemindai kredensial working-tree
+    │   ├── network.rs                 # NetworkProberAgent: Linter permukaan jaringan & TLS/CORS
+    │   ├── malware_shield.rs          # MalwareShieldAgent: Deteksi typosquatting & preinstall script
+    │   ├── apk_guard.rs               # ApkAndContainerGuardAgent: Audit AndroidManifest & Dockerfile
+    │   ├── patcher.rs                 # AutoHardeningAgent: Generator unified diff & vendor hotfix
+    │   └── verifier.rs                # VerificationAgent: Eksekutor Security Unit-Test & Safe Outputs
+    ├── execution/                     # Mesin Eksekusi Alur Kerja Asinkron
+    │   ├── mod.rs
+    │   └── engine.rs                  # ExecutionEngine: Orkestrasi pipeline Tri-Stage Audit
+    ├── skills/                        # Pengelola Ekosistem 3-Tier Interactive Skills
+    │   └── mod.rs                     # SkillRegistry: Progressive YAML loader, Import/Export & Synth
+    └── ui/                            # Lapisan Presentasi Full-TUI (50/50 Split & 5-Tab Workspace)
+        ├── mod.rs
+        ├── app.rs                     # Loop 60 FPS, Mouse/Key Event Drain & State Controller
+        ├── markdown.rs                # Perender Markdown terminal (pulldown-cmark)
+        ├── latex.rs                   # Perender formula matematika LaTeX
+        └── views/                     # Komponen tampilan modular
+            ├── mod.rs
+            ├── sidebar_view.rs        # Panel Kiri: AI Assistant Chat, Slash REPL & Autocomplete
+            ├── graph_view.rs          # Tab 1: Rataflow DAG Whiteboard Canvas
+            ├── matrix_view.rs         # Tab 2: Tabel Matriks Kerentanan (Findings)
+            ├── patch_view.rs          # Tab 3: Unified Diff Inspector & Apply/Rollback Controls
+            ├── logs_view.rs           # Tab 4: Live Execution & Improvisation Log Stream
+            ├── skills_view.rs         # Tab 5: 3-Tier Skills Registry & Invocation Telemetry
+            ├── modal_view.rs          # Overlay Modal pemilihan Provider, Model, API Key & URL
+            └── welcome_view.rs        # Tampilan inisialisasi awal
 ```
 
-### 9.2 Konfigurasi Optimasi Kompilasi Rilis (`Cargo.toml` Root)
+### 9.2 Konfigurasi Optimasi Kompilasi Rilis (`Cargo.toml`)
 
-Agar menghasilkan satu berkas biner yang sangat kecil, cepat, dan siap didistribusikan ke berbagai sistem operasi (*Linux, macOS, Windows*), gunakan konfigurasi profil rilis berikut:
+Agar menghasilkan satu berkas biner mandiri yang cepat dan siap didistribusikan lintas sistem operasi (*Linux, macOS, Windows*):
 
 ```toml
-[workspace]
-resolver = "2"
-members = [
-    "crates/asterisk-cli",
-    "crates/asterisk-tui",
-    "crates/asterisk-core",
-    "crates/asterisk-graph",
-    "crates/asterisk-scanners",
-    "crates/asterisk-agents",
-]
+[package]
+name = "asterisk"
+version = "0.1.0"
+edition = "2024"
 
 [profile.release]
 opt-level = 3
-lto = "thin"              # Link-Time Optimization lintas crate untuk performa maksimal
+lto = "thin"              # Link-Time Optimization untuk performa maksimal
 codegen-units = 1         # Memaksimalkan optimasi instruksi CPU
 panic = "abort"           # Menghilangkan overhead unwinding stack
-strip = "symbols"         # Memangkas ukuran biner hingga < 20 MB
+strip = "symbols"         # Memangkas ukuran biner
 ```
 
-### 9.3 Urutan Fase Implementasi Tim (*Engineering Roadmap / Sprint Plan*)
+### 9.3 Urutan Gelombang Implementasi Tim (*Parallel & Linear Wave Execution Plan*)
 
-1. **Fase 1 (Pondasi Kernel & Storage):** Mengimplementasikan asterisk`-core` (skema SQLite WAL, `PolicyGate`, pembatasan direktori proyek, dan manajemen `git2` Worktree).
-2. **Fase 2 (Mesin Deterministik&#x20;****`GraphCore`****&#x20;& Scanners):** Mengimplementasikan asterisk`-graph` (`tree-sitter` + `petgraph` untuk *Call Graph*, *Taint Flow*, dan *Phantom Dependency*) serta `asterisk-scanners`.
-3. **Fase 3 (Orkestrasi Agen, MCP & 3-Tier Skills):** Mengimplementasikan `asterisk-agents` (konektor `SmartRouter` ke Ollama/Cloud, pemuat YAML `.skill.md` *on-demand*, serta siklus *Detection&#x20;**$\to$**&#x20;Triage&#x20;**$\to$**&#x20;Auto-Hardening*).
-4. **Fase 4 (Antarmuka Full-TUI & Whiteboard&#x20;****`rataflow`****):** Mengimplementasikan `asterisk-tui` (menghubungkan saluran telemetri ke kanvas interaktif `rataflow`, panel *Git Diff*, dan parser perintah `/slash commands`).
+1. **Gelombang 0 (Pondasi Linear):** Standarisasi identitas paket `asterisk`, direktori `.asterisk/`, serta pendaftaran dependensi utama di `Cargo.toml`.
+2. **Gelombang 1 (Pengembangan Modul Inti Secara Paralel — Bebas Bentrok):**
+   * *Track A (`src/core/storage.rs`):* Implementasi SQLite WAL (`state.sqlite`) & log `audit_trail.jsonl`.
+   * *Track B (`src/core/graph.rs`):* Upgrade mesin AST `CodeContextGraph` (`ast-grep-core`/`tree-sitter`) & `--diff-scope=local`.
+   * *Track C (`src/skills/mod.rs` & `src/core/security_md.rs`):* Ekosistem 3-Tier `.skill.md` (*Progressive Disclosure*) & parser `SECURITY.md`.
+   * *Track D (`src/subagents/`):* Implementasi `malware_shield.rs`, `apk_guard.rs`, dan *Vendor Hotfix Backport* di `patcher.rs`.
+   * *Track E (`src/subagents/verifier.rs` & `src/core/sandbox.rs`):* Eksekusi dinamis *Security Unit Test* di Git Worktree, *Safe Outputs Gate*, & *Checkpoint Rewind*.
+3. **Gelombang 2 (Konvergensi & Integrasi Akhir):** Merangkai seluruh modul Gelombang 1 ke dalam pipeline *Tri-Stage AI Triage* di `src/execution/engine.rs` serta menambahkan perintah `/slash` baru di `src/ui/app.rs`.

@@ -114,8 +114,8 @@ Setiap kebutuhan fungsional diberi kode **`FR-XX`** dengan tingkat prioritas **`
   Untuk setiap celah berstatus *Reachable*, *Sub-Agent* harus bekerja di dalam ruang isolasi **Git Worktree** untuk membuat skrip *Security Unit Test* lokal, menulis kode perbaikan (*auto-hardening patch*), dan menjalankan pengujian ulang hingga lulus 100% tanpa merusak kode asli pengembang.
 * **`FR-12`****&#x20;\[P1] Penambalan Pustaka Lokal Tanpa Upgrade (*****Vendor Hotfix Backport*****):**
   Menyediakan perintah `/hotfix --no-upgrade` yang menambal langsung fungsi rentan di dalam kode *library* pihak ketiga secara lokal dan menghasilkan berkas `.patch` otomatis bagi tim yang menghindari *breaking changes*.
-* **`FR-13`****&#x20;\[P0] Gerbang Izin Pra-Eksekusi,&#x20;*****Safe Outputs Gate*****&#x20;&&#x20;*****Immutable Audit Trail*****:**
-  1. Memblokir mutlak akses berkas di luar folder proyek aktif (`Deny -> Ask -> Allow`) dan menangkal *Indirect Prompt Injection* melalui *Background Security Classifier*.
+* **`FR-13`****&#x20;\[P0] Gerbang Izin Pra-Eksekusi (*****Cedar Policy & Capability Jail*****),&#x20;*****Safe Outputs Gate*****&#x20;&&#x20;*****Immutable Audit Trail*****:**
+  1. Mengisolasi akses sistem berkas menggunakan **Capability-Based Filesystem Sandbox (`cap-std` `ProjectJail`)** untuk memblokir mutlak akses berkas di luar folder proyek aktif, dipadukan dengan mesin otorisasi formal **AWS Cedar Policy (`cedar-policy` `PolicyGate`)** berskema `Deny -> AskUser -> Allow` serta penangkal *Indirect Prompt Injection*.
   2. Memeriksa ulang setiap kode tambalan buatan AI dengan aturan deterministik (*Safe Outputs*) sebelum diserahkan ke pengguna.
   3. Merekam seluruh jejak aktivitas agen ke dalam log *OpenTelemetry* (`audit_trail.jsonl`) untuk bukti kepatuhan audit.
 
@@ -123,17 +123,22 @@ Setiap kebutuhan fungsional diberi kode **`FR-XX`** dengan tingkat prioritas **`
 
 ## 6. Pengalaman Pengguna (UX) & Alur Interaksi Full-TUI
 
-### 6.1 Desain Antarmuka Tiga Panel (*Full-TUI Split-Pane Architecture*)
+### 6.1 Desain Antarmuka Dua Panel & 5-Tab Workspace (*50/50 Dual-Pane Split Architecture*)
 
-Seluruh interaksi pengguna berlangsung di dalam satu layar terminal yang dibagi menjadi 3 area kerja terintegrasi:
+Seluruh interaksi pengguna berlangsung di dalam satu layar terminal modern (gaya monokrom kontras tinggi bebas distraksi) yang dibagi secara simetris menjadi 2 panel utama terintegrasi:
 
-1. **Panel Utama (Kiri — 60% Layar):&#x20;*****Interactive TUI Whiteboard Canvas***
-   * Kanvas tanpa batas (*infinite canvas*) berbasis terminal yang dapat digeser (*pan*) dan diperbesar (*zoom*) menggunakan *mouse* maupun papan ketik (`h, j, k, l`).
-   * Menampilkan kotak *Orchestrator*, pertumbuhan kotak *Sub-Agent* secara organik, peta jalur fungsi rentan (*Code Context Graph*), animasi panah aliran pesan antar-agen (*Braille edges*), serta percabangan pohon keputusan (*decision tree*) secara *live*.
-2. **Panel Inspeksi (Kanan Atas — 40% Layar):&#x20;*****Node Inspector & Side-by-Side Diff Viewer***
-   * Saat pengguna mengeklik salah satu kotak *node* di kanvas TUI, panel ini menampilkan detail kerja agen tersebut: alasan *Triage*, status *Security Unit Test*, dan perbandingan kode **Before vs After (*****Git Diff*****)** berwarna hijau/merah.
-3. **Panel Komando (Kanan Bawah):&#x20;*****Steerable Slash-Command REPL***
-   * Baris perintah interaktif dengan fitur *autocompletion* untuk menjalankan perintah `/init-sec`, `/audit`, `/reachability`, `/secrets`, `/shield`, `/patch`, `/hotfix`, `/skills`, `/mode`, `/todos`, dan `/doctor`.
+1. **Panel Kiri (50% Layar):&#x20;*****Interactive AI Security Assistant & Steerable Slash-Command REPL***
+   * Menampilkan percakapan interaktif dengan *Security Agent*, rincian rencana strategi pertahanan (*Defense Plan*), aliran pemikiran agen (*Thinking*), serta eksekusi *tool call* secara *real-time*.
+   * Dilengkapi perender **Markdown terminal (`pulldown-cmark`)** dan perender rumus matematika **LaTeX** bawaan.
+   * Baris perintah interaktif di bagian bawah dengan *popup autocompletion* untuk menjalankan perintah `/scan` (`/audit`), `/init-sec`, `/reachability`, `/secrets`, `/shield`, `/apply` (`/patch`), `/rollback`, `/hotfix`, `/skills`, `/config`, `/provider`, `/model`, `/key`, `/url`, `/custom`, `/export`, `/pause`, dan `/help`.
+   * Dilengkapi **Interactive Configuration Modals** (*popup overlay*) untuk memilih penyedia AI (*Anthropic Claude, OpenAI, Google Gemini, DeepSeek, Ollama Local, Custom Endpoint*), memilih model, serta mengatur kredensial secara instan tanpa keluar dari TUI.
+2. **Panel Kanan (50% Layar):&#x20;*****5-Tab Interactive Defense Workspace***
+   Pengguna dapat berpindah antar-tampilan kerja menggunakan tombol `Tab`, `1`–`5`, `F1`–`F5`, atau klik *mouse* langsung pada bilah tab:
+   * **`Tab 1 [Graph]` — *Rataflow Interactive DAG Whiteboard Canvas*:** Kanvas *node-graph* interaktif berbasis `rataflow` yang dapat digeser (*pan*) dan diperbesar (*zoom*), menampilkan *Orchestrator*, *Sub-Agent* spesialis, ruang lingkup direktori/berkas, serta *Pre-Prod Defense Gate* beserta status eksekusinya secara *live*.
+   * **`Tab 2 [Findings]` — *Vulnerability Matrix View*:** Tabel terstruktur berisi daftar kerentanan yang ditemukan lengkap dengan tingkat keparahan (`[crit]`, `[high]`, `[med]`, `[low]`), kode CWE, status keterjangkauan (*Reachability*), lokasi berkas/baris, dan rekomendasi mitigasi.
+   * **`Tab 3 [Patches]` — *Unified Diff & Auto-Hardening Inspector*:** Menampilkan perbandingan kode **Before vs After (*****Unified Git Diff*****)**, penjelasan teknis remediasi, serta skrip *Security Unit Test*, dilengkapi pintasan eksekusi cepat **`[a]` (Apply Patch)** dan **`[r]` (Rollback Patch)**.
+   * **`Tab 4 [Execution]` — *Live Agent Execution & Improvisation Logs*:** Aliran log deterministik berstempel waktu dari setiap langkah pemindaian dan manuver adaptasi agen.
+   * **`Tab 5 [Skills]` — *3-Tier Interactive Skills Registry*:** Menampilkan daftar modul keahlian keamanan yang aktif beserta metrik jumlah pemanggilan (*invocations*) oleh *Sub-Agent*.
 
 ### 6.2 Peta Perjalanan Pengguna (*End-to-End User Journey: Day 0 hingga Pre-Release*)
 

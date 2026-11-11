@@ -295,7 +295,7 @@ pub const AVAILABLE_COMMANDS: &[CommandSuggestion] = &[
     CommandSuggestion {
         name: "/exit",
         args: "",
-        description: "Exit constellation application cleanly",
+        description: "Exit asterisk application cleanly",
     },
 ];
 

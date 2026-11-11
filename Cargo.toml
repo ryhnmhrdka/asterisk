@@ -1,10 +1,11 @@
 [package]
-name = "constellation"
+name = "asterisk"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 ast-grep-core = "0.51.1"
+blake3 = "1.5"
 cap-std = "4.0.3"
 cedar-policy = "4.14.1"
 chrono = "0.4.45"
@@ -17,9 +18,18 @@ rataflow = "0.1.0"
 ratatui = "0.30.2"
 regex = "1.13.1"
 rig = { package = "rig-core", version = "0.44.0", features = ["reqwest"] }
-thiserror = "2.0.18"
+rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+serde_yaml = "0.9"
 similar = "3.2.1"
+thiserror = "2.0.18"
 tokio = { version = "1.54.1", features = ["full"] }
 walkdir = "2.5.0"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

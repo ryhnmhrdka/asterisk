@@ -17,7 +17,7 @@ impl WorktreeSandbox {
         let safe_name = finding_id.replace(['/', '\\', ' '], "-").to_lowercase();
         let wt_name = format!("wt-{}", safe_name);
 
-        let worktree_dir = repo_path.join(".sentinel").join("worktrees").join(&wt_name);
+        let worktree_dir = repo_path.join(".asterisk").join("worktrees").join(&wt_name);
 
         if worktree_dir.exists() {
             let _ = fs::remove_dir_all(&worktree_dir);

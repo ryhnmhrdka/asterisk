@@ -26,13 +26,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 1. Help flag
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("constellation :: autonomous pre-production code defense harness");
+        println!("asterisk :: autonomous pre-production code defense harness");
         println!("\nusage:");
-        println!("  constellation                   launch interactive launcher (ascii + target prompt)");
-        println!("  constellation [path]            run directly on specified local directory");
-        println!("  constellation --ci [path]       run in headless CI/CD mode (exit code 1 if unpatched issues)");
-        println!("  constellation --install-hook    install automated .git/hooks/pre-commit defense guard");
-        println!("  constellation --help            show this help message\n");
+        println!("  asterisk                   launch interactive launcher (ascii + target prompt)");
+        println!("  asterisk [path]            run directly on specified local directory");
+        println!("  asterisk --ci [path]       run in headless CI/CD mode (exit code 1 if unpatched issues)");
+        println!("  asterisk --install-hook    install automated .git/hooks/pre-commit defense guard");
+        println!("  asterisk --help            show this help message\n");
         return Ok(());
     }
 
@@ -44,13 +44,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             exit(1);
         }
         let hook_script = r#"#!/usr/bin/env bash
-# constellation automated pre-commit defense hook
-echo "[constellation] verifying pre-production code defense..."
-constellation --ci .
+# asterisk automated pre-commit defense hook
+echo "[asterisk] verifying pre-production code defense..."
+asterisk --ci .
 EXIT_CODE=$?
 if [ $EXIT_CODE -ne 0 ]; then
-    echo "[constellation] commit blocked due to unresolved security vulnerabilities!"
-    echo "[constellation] run 'constellation' to review and apply auto-hardening patches."
+    echo "[asterisk] commit blocked due to unresolved security vulnerabilities!"
+    echo "[asterisk] run 'asterisk' to review and apply auto-hardening patches."
     exit 1
 fi
 "#;
@@ -76,7 +76,7 @@ fi
         .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     if is_ci_mode {
-        println!("constellation :: headless ci defense audit running on: {}", target_dir.display());
+        println!("asterisk :: headless ci defense audit running on: {}", target_dir.display());
         let profile = orchestrator::WorkspaceScanner::scan(&target_dir);
         let secrets = subagents::SecretHunterAgent::scan(&target_dir);
         let sast = subagents::SastAnalyzerAgent::scan(&target_dir);
@@ -152,6 +152,6 @@ fi
     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
 
-    println!("constellation defense harness terminated cleanly.");
+    println!("asterisk defense harness terminated cleanly.");
     Ok(())
 }

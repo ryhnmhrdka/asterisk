@@ -1,6 +1,6 @@
-use constellation::orchestrator::{AgentGraphBuilder, StrategyPlanner, WorkspaceScanner};
-use constellation::skills::SkillRegistry;
-use constellation::subagents::{
+use asterisk::orchestrator::{AgentGraphBuilder, StrategyPlanner, WorkspaceScanner};
+use asterisk::skills::SkillRegistry;
+use asterisk::subagents::{
     AutoHardeningAgent, NetworkProberAgent, SastAnalyzerAgent, SecretHunterAgent, VerificationAgent,
 };
 use std::fs;
@@ -74,7 +74,7 @@ fn test_harness_full_pipeline() {
 
 #[test]
 fn test_app_empty_state_and_auth_modal_gate() {
-    use constellation::ui::App;
+    use asterisk::ui::App;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     // App must start with 0 findings, 0 patches, empty plan, empty graph (no dummy data)
@@ -89,7 +89,7 @@ fn test_app_empty_state_and_auth_modal_gate() {
 
     // If API key is not configured, trigger_audit must block and display the auth modal
     app.config.api_key = None;
-    app.config.provider = constellation::types::AiProvider::AnthropicClaude;
+    app.config.provider = asterisk::types::AiProvider::AnthropicClaude;
 
     // Triggering audit without key
     app.trigger_audit();
@@ -111,8 +111,8 @@ fn test_app_empty_state_and_auth_modal_gate() {
 
 #[test]
 fn test_command_suggestions_and_execution() {
-    use constellation::types::{get_matching_commands, ChatMessage};
-    use constellation::ui::App;
+    use asterisk::types::{get_matching_commands, ChatMessage};
+    use asterisk::ui::App;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     // 1. Test get_matching_commands helper
@@ -174,9 +174,9 @@ fn test_command_suggestions_and_execution() {
 
 #[test]
 fn test_provider_model_selector_and_custom_provider_setup_flow() {
-    use constellation::types::AiProvider;
-    use constellation::ui::app::ActiveModal;
-    use constellation::ui::App;
+    use asterisk::types::AiProvider;
+    use asterisk::ui::app::ActiveModal;
+    use asterisk::ui::App;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     let mut app = App::new(PathBuf::from("."), false);
@@ -240,9 +240,9 @@ fn test_provider_model_selector_and_custom_provider_setup_flow() {
 
 #[test]
 fn test_slash_command_isolation_and_tab_click_accuracy() {
-    use constellation::types::ChatMessage;
-    use constellation::ui::app::FocusedPane;
-    use constellation::ui::App;
+    use asterisk::types::ChatMessage;
+    use asterisk::ui::app::FocusedPane;
+    use asterisk::ui::App;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;

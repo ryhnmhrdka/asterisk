@@ -28,7 +28,7 @@ impl SidebarView {
         area: Rect,
         chat_messages: &[ChatMessage],
         chat_scroll: usize,
-        nodes_info: &std::collections::HashMap<String, SproutedNodeInfo>,
+        _nodes_info: &std::collections::HashMap<String, SproutedNodeInfo>,
         selected_node: Option<&SproutedNodeInfo>,
         prompt_input: &str,
         selected_suggestion: usize,
@@ -36,14 +36,24 @@ impl SidebarView {
         expanded_messages: &HashSet<usize>,
         has_patches: bool,
     ) -> SidebarClickTargets {
+        let input_text_len = prompt_input.chars().count();
+        let est_width = (area.width.saturating_sub(14)).max(15) as usize;
+        let text_lines = if input_text_len == 0 {
+            1
+        } else {
+            ((input_text_len + 3) / est_width + 1).min(5)
+        };
+        let input_box_height = (text_lines as u16).clamp(2, 4);
+        let prompt_section_height = input_box_height + 1; // +1 for hint line
+
+        let has_inspector = selected_node.is_some();
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(4),                                               // 1. Review Modules Tray
+                Constraint::Length(prompt_section_height),                           // 1. Input Prompt at TOP
                 Constraint::Min(8),                                                  // 2. Chatbot Message Stream
                 Constraint::Length(if awaiting_confirmation { 3 } else { 0 }),       // 3. Confirmation Buttons
-                Constraint::Length(4),                                               // 4. Module Inspector Box
-                Constraint::Length(3),                                               // 5. Input Prompt Row (with bottom margin)
+                Constraint::Length(if has_inspector { 4 } else { 0 }),               // 4. Module Inspector Box (only when selected)
             ])
             .split(area);
 
@@ -66,68 +76,78 @@ impl SidebarView {
             .style(Style::default().bg(Color::Rgb(16, 17, 21)));
         f.render_widget(sidebar_bg, area);
 
-        // 1. Review Modules Tray (Clean filled banner, NO bottom border)
-        let tray_block = Block::default()
-            .style(Style::default().bg(Color::Rgb(20, 21, 26)));
+        // 1. Interactive Chatbot Input Bar AT TOP with Clickable [ Send ↵ ] Button
+        let prompt_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(input_box_height), // 1. Input Box & Send button
+                Constraint::Length(1),                // 2. Clean hotkey hint line
+            ])
+            .split(chunks[0]);
 
-        let mut tray_lines = Vec::new();
-        tray_lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(" MODULES ", Style::default().fg(Color::Rgb(180, 182, 192)).bg(Color::Rgb(28, 29, 36)).add_modifier(Modifier::BOLD)),
-            Span::styled("  click row to inspect", Style::default().fg(Color::Rgb(110, 112, 120))),
-        ]));
+        let input_split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(10),
+                Constraint::Length(1),  // Quiet spacer
+                Constraint::Length(10), // Send button
+            ])
+            .split(prompt_chunks[0]);
 
-        let mut key_subagents: Vec<(String, String, String)> = nodes_info
-            .values()
-            .filter(|n| n.tier == "subagent" && (n.status == AgentStatus::Running || n.is_paused || n.status == AgentStatus::Failed))
-            .map(|n| {
-                let clean_label = n.label.lines().next().unwrap_or("module").to_string();
-                let clean_target = n.target_path.clone().unwrap_or_else(|| "-".to_string());
-                (n.id.clone(), clean_label, clean_target)
-            })
-            .collect();
+        let input_rect = input_split[0];
+        let send_rect = input_split[2];
 
-        key_subagents.sort_by(|a, b| a.0.cmp(&b.0));
+        let prompt_block = Block::default()
+            .style(Style::default().bg(Color::Rgb(24, 25, 31)));
 
-        let tray_area = chunks[0];
-        let mut row_y = tray_area.y + 1;
-
-        if key_subagents.is_empty() {
-            tray_lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled("workspace idle", Style::default().fg(Color::Rgb(120, 122, 130))),
-                Span::styled("  •  press [space] or /scan to audit", Style::default().fg(Color::Rgb(90, 92, 100))),
-            ]));
-        } else {
-            let tray_items: Vec<(&str, &str, &str)> = key_subagents
-                .iter()
-                .take(3)
-                .map(|(id, label, target)| (id.as_str(), label.as_str(), target.as_str()))
-                .collect();
-
-            for (id, name, target) in tray_items {
-                let info = nodes_info.get(id);
-                let (status_icon, status_color) = match info.map(|n| (n.status, n.is_paused)) {
-                    Some((_, true)) => ("⏸", Color::DarkGray),
-                    Some((AgentStatus::Running, false)) => ("⠋", Color::White),
-                    Some((AgentStatus::Failed, false)) => ("✖", Color::Red),
-                    _ => ("✔", Color::Gray),
-                };
-
-                let row_rect = Rect::new(tray_area.x, row_y, tray_area.width, 1);
-                targets.subagent_rows.push((id.to_string(), row_rect));
-
-                tray_lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(format!("{status_icon} "), Style::default().fg(status_color)),
-                    Span::styled(format!("{name:<16} "), Style::default().fg(Color::White)),
-                    Span::styled(format!("{target}"), Style::default().fg(Color::Rgb(120, 122, 130))),
-                ]));
-                row_y += 1;
+        let prompt_display = if prompt_input.is_empty() {
+            if awaiting_confirmation {
+                vec![
+                    Span::styled(" > ", Style::default().fg(Color::Rgb(255, 200, 100)).add_modifier(Modifier::BOLD)),
+                    Span::styled("click [Execute] or type 'y'... ", Style::default().fg(Color::Rgb(110, 112, 120))),
+                ]
+            } else {
+                vec![
+                    Span::styled(" > ", Style::default().fg(Color::Rgb(160, 200, 255)).add_modifier(Modifier::BOLD)),
+                    Span::styled("type instructions or slash commands... ", Style::default().fg(Color::Rgb(100, 102, 112))),
+                ]
             }
-        }
+        } else {
+            vec![
+                Span::styled(" > ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(prompt_input, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("█", Style::default().fg(Color::White)),
+            ]
+        };
 
-        f.render_widget(Paragraph::new(tray_lines).block(tray_block), tray_area);
+        let mut prompt_paragraph = Paragraph::new(Line::from(prompt_display))
+            .wrap(Wrap { trim: false })
+            .block(prompt_block);
+        if text_lines as u16 > input_box_height {
+            prompt_paragraph = prompt_paragraph.scroll(((text_lines as u16).saturating_sub(input_box_height), 0));
+        }
+        f.render_widget(prompt_paragraph, input_rect);
+
+        // [ Send ↵ ] Button (Sleek filled pill, NO borders)
+        let send_block = Block::default()
+            .style(Style::default().bg(Color::White));
+        let send_text = Line::from(Span::styled(" Send ↵ ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)));
+        f.render_widget(Paragraph::new(send_text).centered().block(send_block), send_rect);
+
+        targets.btn_send = Some(send_rect);
+
+        // Subtitle hint row beneath input box
+        let hint_line = Line::from(vec![
+            Span::raw("  "),
+            Span::styled("type ", Style::default().fg(Color::Rgb(85, 87, 95))),
+            Span::styled("/", Style::default().fg(Color::Rgb(140, 180, 255))),
+            Span::styled(" for commands  •  ", Style::default().fg(Color::Rgb(85, 87, 95))),
+            Span::styled("[Tab]", Style::default().fg(Color::Rgb(140, 142, 150))),
+            Span::styled(" complete  •  ", Style::default().fg(Color::Rgb(85, 87, 95))),
+            Span::styled("[↵]", Style::default().fg(Color::Rgb(140, 142, 150))),
+            Span::styled(" send", Style::default().fg(Color::Rgb(85, 87, 95))),
+        ]);
+        f.render_widget(Paragraph::new(hint_line), prompt_chunks[1]);
 
         // 2. Chat Message Stream (Clean filled surface, NO borders)
         let chat_block = Block::default()
@@ -187,35 +207,74 @@ impl SidebarView {
                     }
                 }
                 ChatMessage::Thinking { agent, thought } => {
-                    all_chat_lines.push((
-                        Line::from(vec![
-                            Span::styled("  ⠋ ", Style::default().fg(Color::Rgb(120, 122, 132))),
-                            Span::styled(format!("[{agent}]: "), Style::default().fg(Color::Rgb(130, 132, 142))),
-                            Span::styled(thought, Style::default().fg(Color::Rgb(160, 162, 172)).add_modifier(Modifier::ITALIC)),
-                        ]),
-                        None,
-                    ));
+                    let wrapped = wrap_multiline(thought, max_text_width.saturating_sub(agent.len() + 8).max(10));
+                    for (i, l) in wrapped.into_iter().enumerate() {
+                        if i == 0 {
+                            all_chat_lines.push((
+                                Line::from(vec![
+                                    Span::styled("  ⠋ ", Style::default().fg(Color::Rgb(120, 122, 132))),
+                                    Span::styled(format!("[{agent}]: "), Style::default().fg(Color::Rgb(130, 132, 142))),
+                                    Span::styled(l, Style::default().fg(Color::Rgb(160, 162, 172)).add_modifier(Modifier::ITALIC)),
+                                ]),
+                                None,
+                            ));
+                        } else {
+                            all_chat_lines.push((
+                                Line::from(vec![
+                                    Span::raw("    "),
+                                    Span::styled(l, Style::default().fg(Color::Rgb(160, 162, 172)).add_modifier(Modifier::ITALIC)),
+                                ]),
+                                None,
+                            ));
+                        }
+                    }
                 }
                 ChatMessage::ToolCall { tool, input, .. } => {
-                    all_chat_lines.push((
-                        Line::from(vec![
-                            Span::styled("  ❯ task: ", Style::default().fg(Color::Rgb(120, 122, 132))),
-                            Span::styled(format!("{tool} "), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                            Span::styled(format!("({input})"), Style::default().fg(Color::Rgb(130, 132, 142))),
-                        ]),
-                        None,
-                    ));
+                    let wrapped = wrap_multiline(input, max_text_width.saturating_sub(tool.len() + 12).max(10));
+                    for (i, l) in wrapped.into_iter().enumerate() {
+                        if i == 0 {
+                            all_chat_lines.push((
+                                Line::from(vec![
+                                    Span::styled("  ❯ task: ", Style::default().fg(Color::Rgb(120, 122, 132))),
+                                    Span::styled(format!("{tool} "), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                                    Span::styled(format!("({l})"), Style::default().fg(Color::Rgb(130, 132, 142))),
+                                ]),
+                                None,
+                            ));
+                        } else {
+                            all_chat_lines.push((
+                                Line::from(vec![
+                                    Span::raw("    "),
+                                    Span::styled(l, Style::default().fg(Color::Rgb(130, 132, 142))),
+                                ]),
+                                None,
+                            ));
+                        }
+                    }
                 }
                 ChatMessage::ToolResult { output, elapsed_ms, .. } => {
                     let ms_str = elapsed_ms.map(|ms| format!(" ({ms}ms)")).unwrap_or_default();
-                    all_chat_lines.push((
-                        Line::from(vec![
-                            Span::styled("    ✔ result: ", Style::default().fg(Color::Rgb(120, 195, 130))),
-                            Span::styled(output, Style::default().fg(Color::Rgb(210, 212, 220))),
-                            Span::styled(ms_str, Style::default().fg(Color::Rgb(110, 112, 120))),
-                        ]),
-                        None,
-                    ));
+                    let wrapped = wrap_multiline(output, max_text_width.saturating_sub(16).max(10));
+                    for (i, l) in wrapped.into_iter().enumerate() {
+                        if i == 0 {
+                            all_chat_lines.push((
+                                Line::from(vec![
+                                    Span::styled("    ✔ result: ", Style::default().fg(Color::Rgb(120, 195, 130))),
+                                    Span::styled(l, Style::default().fg(Color::Rgb(210, 212, 220))),
+                                    Span::styled(ms_str.clone(), Style::default().fg(Color::Rgb(110, 112, 120))),
+                                ]),
+                                None,
+                            ));
+                        } else {
+                            all_chat_lines.push((
+                                Line::from(vec![
+                                    Span::raw("      "),
+                                    Span::styled(l, Style::default().fg(Color::Rgb(210, 212, 220))),
+                                ]),
+                                None,
+                            ));
+                        }
+                    }
                 }
                 ChatMessage::Agent { sender, text } => {
                     all_chat_lines.push((
@@ -227,19 +286,46 @@ impl SidebarView {
 
                     let parsed = parse_markdown(text);
                     for pl in parsed {
-                        let mut spans = vec![Span::raw("    ")];
-                        spans.extend(pl.spans);
-                        all_chat_lines.push((Line::from(spans), None));
+                        let line_text: String = pl.spans.iter().map(|s| s.content.as_ref()).collect();
+                        if line_text.chars().count() > max_text_width.saturating_sub(4).max(10) {
+                            let wrapped = wrap_multiline(&line_text, max_text_width.saturating_sub(4).max(10));
+                            for wl in wrapped {
+                                all_chat_lines.push((
+                                    Line::from(vec![
+                                        Span::raw("    "),
+                                        Span::styled(wl, Style::default().fg(Color::Rgb(210, 212, 220))),
+                                    ]),
+                                    None,
+                                ));
+                            }
+                        } else {
+                            let mut spans = vec![Span::raw("    ")];
+                            spans.extend(pl.spans);
+                            all_chat_lines.push((Line::from(spans), None));
+                        }
                     }
                 }
                 ChatMessage::System(text) => {
-                    all_chat_lines.push((
-                        Line::from(vec![
-                            Span::styled("  ● system: ", Style::default().fg(Color::Rgb(110, 112, 122))),
-                            Span::styled(text, Style::default().fg(Color::Rgb(200, 202, 210))),
-                        ]),
-                        None,
-                    ));
+                    let wrapped = wrap_multiline(text, max_text_width.saturating_sub(14).max(10));
+                    for (i, l) in wrapped.into_iter().enumerate() {
+                        if i == 0 {
+                            all_chat_lines.push((
+                                Line::from(vec![
+                                    Span::styled("  ● system: ", Style::default().fg(Color::Rgb(110, 112, 122))),
+                                    Span::styled(l, Style::default().fg(Color::Rgb(200, 202, 210))),
+                                ]),
+                                None,
+                            ));
+                        } else {
+                            all_chat_lines.push((
+                                Line::from(vec![
+                                    Span::raw("    "),
+                                    Span::styled(l, Style::default().fg(Color::Rgb(200, 202, 210))),
+                                ]),
+                                None,
+                            ));
+                        }
+                    }
                 }
             }
             all_chat_lines.push((Line::raw(""), None));
@@ -301,12 +387,11 @@ impl SidebarView {
             targets.btn_cancel = Some(btn_canc_rect);
         }
 
-        // 4. Module Inspector Box (Sleek filled surface, NO borders)
-        let node_block = Block::default()
-            .style(Style::default().bg(Color::Rgb(22, 23, 29)));
-
-        let node_area = chunks[3];
-        let (node_lines, pause_rect, apply_rect) = if let Some(node) = selected_node {
+        // 4. Module Inspector Box (Sleek filled surface, only shown when a node is selected)
+        if let Some(node) = selected_node {
+            let node_block = Block::default()
+                .style(Style::default().bg(Color::Rgb(22, 23, 29)));
+            let node_area = chunks[3];
             let status_str = if node.is_paused { "paused" } else { node.status.as_str() };
             let p_rect = Rect::new(node_area.x + 2, node_area.y + 2, 14.min(node_area.width.saturating_sub(4)), 1);
             let a_rect = Rect::new(node_area.x + 18, node_area.y + 2, 18.min(node_area.width.saturating_sub(20)), 1);
@@ -349,97 +434,19 @@ impl SidebarView {
                 ]),
                 Line::from(action_spans),
             ];
-            (lines, opt_pause, opt_apply)
-        } else {
-            let lines = vec![
-                Line::from(vec![
-                    Span::styled("  ● ", Style::default().fg(Color::Rgb(100, 102, 112))),
-                    Span::styled("click any module on graph to inspect", Style::default().fg(Color::Rgb(120, 122, 130))),
-                ]),
-                Line::from(Span::styled("    or use arrow keys to navigate flow", Style::default().fg(Color::Rgb(90, 92, 100)))),
-            ];
-            (lines, None, None)
-        };
 
-        f.render_widget(Paragraph::new(node_lines).block(node_block), node_area);
-        targets.btn_pause = pause_rect;
-        targets.btn_apply = apply_rect;
+            f.render_widget(Paragraph::new(lines).block(node_block), node_area);
+            targets.btn_pause = opt_pause;
+            targets.btn_apply = opt_apply;
+        }
 
-        // 5. Interactive Chatbot Input Bar with Clickable [ Send ↵ ] Button
-        let prompt_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1), // 1. Input Box & Send button
-                Constraint::Length(1), // 2. Clean hotkey hint line
-                Constraint::Length(1), // 3. Bottom breathing margin
-            ])
-            .split(chunks[4]);
-
-        let input_split = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Min(10),
-                Constraint::Length(1), // Quiet spacer
-                Constraint::Length(10), // Send button
-            ])
-            .split(prompt_chunks[0]);
-
-        let input_rect = input_split[0];
-        let send_rect = input_split[2];
-
-        let prompt_block = Block::default()
-            .style(Style::default().bg(Color::Rgb(24, 25, 31)));
-
-        let prompt_display = if prompt_input.is_empty() {
-            if awaiting_confirmation {
-                vec![
-                    Span::styled(" > ", Style::default().fg(Color::Rgb(255, 200, 100)).add_modifier(Modifier::BOLD)),
-                    Span::styled("click [Execute] or type 'y'... ", Style::default().fg(Color::Rgb(110, 112, 120))),
-                ]
-            } else {
-                vec![
-                    Span::styled(" > ", Style::default().fg(Color::Rgb(160, 200, 255)).add_modifier(Modifier::BOLD)),
-                    Span::styled("type instructions or slash commands... ", Style::default().fg(Color::Rgb(100, 102, 112))),
-                ]
-            }
-        } else {
-            vec![
-                Span::styled(" > ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(prompt_input, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled("█", Style::default().fg(Color::White)),
-            ]
-        };
-
-        f.render_widget(Paragraph::new(Line::from(prompt_display)).block(prompt_block), input_rect);
-
-        // [ Send ↵ ] Button (Sleek filled pill, NO borders)
-        let send_block = Block::default()
-            .style(Style::default().bg(Color::White));
-        let send_text = Line::from(Span::styled(" Send ↵ ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)));
-        f.render_widget(Paragraph::new(send_text).centered().block(send_block), send_rect);
-
-        targets.btn_send = Some(send_rect);
-
-        // Subtitle hint row beneath input box (so it has comfortable bottom breathing space)
-        let hint_line = Line::from(vec![
-            Span::raw("  "),
-            Span::styled("type ", Style::default().fg(Color::Rgb(85, 87, 95))),
-            Span::styled("/", Style::default().fg(Color::Rgb(140, 180, 255))),
-            Span::styled(" for commands  •  ", Style::default().fg(Color::Rgb(85, 87, 95))),
-            Span::styled("[Tab]", Style::default().fg(Color::Rgb(140, 142, 150))),
-            Span::styled(" complete  •  ", Style::default().fg(Color::Rgb(85, 87, 95))),
-            Span::styled("[↵]", Style::default().fg(Color::Rgb(140, 142, 150))),
-            Span::styled(" send", Style::default().fg(Color::Rgb(85, 87, 95))),
-        ]);
-        f.render_widget(Paragraph::new(hint_line), prompt_chunks[1]);
-
-        // 6. Command Autocomplete Suggestions Popup
+        // 5. Command Autocomplete Suggestions Popup (Drops downwards beneath the prompt)
         let suggestions = get_matching_commands(prompt_input);
         if !suggestions.is_empty() {
             let visible_count = suggestions.len().min(6);
             let popup_height = (visible_count + 2) as u16;
             let popup_width = input_rect.width + send_rect.width + 1;
-            let popup_y = input_rect.y.saturating_sub(popup_height);
+            let popup_y = input_rect.y + input_rect.height;
             let popup_rect = Rect::new(input_rect.x, popup_y, popup_width, popup_height);
 
             f.render_widget(Clear, popup_rect);

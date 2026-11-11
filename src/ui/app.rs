@@ -17,7 +17,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Paragraph, Tabs},
+    widgets::{Block, Paragraph},
     Frame,
 };
 use std::collections::{HashMap, HashSet};
@@ -810,7 +810,7 @@ impl App {
                            | `/pause` | Pause / resume selected agent node in workflow |\n\
                            | `/clear` | Clear chat message history |\n\
                            | `/help` | Display this command reference |\n\
-                           | `/exit` | Exit constellation defense harness |\n\n\
+                           | `/exit` | Exit asterisk defense harness |\n\n\
                            **Keyboard Shortcuts:**\n\
                            - `[1]`..`[5]`: Switch tabs (Flow, Findings, Patches, Execution, Skills)\n\
                            - `[Space]`: Run security audit\n\
@@ -886,6 +886,7 @@ impl App {
                     self.action_msg = Some("authentication required: please set API key.".to_string());
                     return false;
                 }
+                self.chat_scroll = 0;
                 self.chat_messages.push(ChatMessage::User(input.clone()));
                 let hub = SecurityAgentHub::new(self.target_dir.clone(), Arc::new(PolicyGate::default()), self.config.clone());
                 let sender = self.engine_tx.clone();
@@ -1288,7 +1289,7 @@ impl App {
 
         let top_header = Line::from(vec![
             Span::raw(" "),
-            Span::styled(" constellation ", Style::default().fg(Color::White).bg(Color::Rgb(28, 29, 36)).add_modifier(Modifier::BOLD)),
+            Span::styled(" asterisk ", Style::default().fg(Color::White).bg(Color::Rgb(28, 29, 36)).add_modifier(Modifier::BOLD)),
             Span::raw("  "),
             Span::styled(format!(" {} ", self.target_dir.display()), Style::default().fg(Color::Rgb(170, 172, 180)).bg(Color::Rgb(24, 25, 31))),
             Span::raw("  "),
@@ -1350,33 +1351,51 @@ impl App {
 
         let findings_count = self.findings.len();
         let patches_count = self.patches.len();
-        let titles = [
-            format!("  [1] Flow  "),
-            format!("  [2] Findings ({findings_count})  "),
-            format!("  [3] Patches ({patches_count})  "),
-            format!("  [4] Execution  "),
-            format!("  [5] Skills  "),
+        let tabs_info = [
+            (0, " 1 Flow ".to_string()),
+            (1, format!(" 2 Findings ({findings_count}) ")),
+            (2, format!(" 3 Patches ({patches_count}) ")),
+            (3, " 4 Exec ".to_string()),
+            (4, " 5 Skills ".to_string()),
         ];
 
+        let mut tab_spans = Vec::new();
         let mut tab_rects = Vec::new();
         let mut curr_x = tab_bar_area.x;
-        for (i, title) in titles.iter().enumerate() {
-            let width = title.chars().count() as u16;
-            // Covers tab text and generous click boundary (including row above and below)
+
+        tab_spans.push(Span::raw(" "));
+        curr_x += 1;
+
+        for (idx, label) in tabs_info.iter() {
+            let width = label.chars().count() as u16;
+            let is_selected = self.current_tab == *idx;
+
+            let pill_style = if is_selected {
+                Style::default()
+                    .fg(Color::White)
+                    .bg(Color::Rgb(40, 42, 54))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+                    .fg(Color::Rgb(140, 142, 152))
+                    .bg(Color::Rgb(20, 21, 27))
+            };
+
             tab_rects.push((
-                i,
+                *idx,
                 Rect::new(curr_x, right_chunks[0].y, width, 3),
             ));
-            curr_x += width + 1; // +1 for the divider
+
+            tab_spans.push(Span::styled(label.clone(), pill_style));
+            tab_spans.push(Span::raw(" "));
+            curr_x += width + 1;
         }
+
         self.click_targets.tab_rects = tab_rects;
 
-        let tabs = Tabs::new(titles.to_vec())
-            .select(self.current_tab)
-            .style(Style::default().fg(Color::Rgb(130, 132, 142)).bg(Color::Rgb(14, 15, 19)))
-            .highlight_style(Style::default().fg(Color::White).bg(Color::Rgb(36, 38, 48)).add_modifier(Modifier::BOLD))
-            .divider(Span::styled(" ", Style::default().bg(Color::Rgb(14, 15, 19))));
-        f.render_widget(tabs, tab_bar_area);
+        let tab_bar_widget = Paragraph::new(Line::from(tab_spans))
+            .block(Block::default().style(Style::default().bg(Color::Rgb(14, 15, 19))));
+        f.render_widget(tab_bar_widget, tab_bar_area);
 
         let content_area = right_chunks[3];
         match self.current_tab {

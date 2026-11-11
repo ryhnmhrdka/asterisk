@@ -114,7 +114,7 @@ mod tests {
     fn test_cedar_policy_evaluation() {
         let gate = PolicyGate::new().expect("Must create policy gate");
         assert_eq!(
-            gate.evaluate("PatcherAgent", "WriteSandboxFile", ".sentinel/worktrees/wt-1"),
+            gate.evaluate("PatcherAgent", "WriteSandboxFile", ".asterisk/worktrees/wt-1"),
             GateDecision::Allow
         );
         assert_eq!(

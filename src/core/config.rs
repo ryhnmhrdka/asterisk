@@ -25,26 +25,30 @@ impl Default for AppConfig {
 
 impl AppConfig {
     pub fn config_path() -> PathBuf {
+        let local_path = PathBuf::from(".asterisk").join("config.json");
+        if local_path.exists() {
+            return local_path;
+        }
         if let Ok(home) = env::var("HOME") {
-            let path = PathBuf::from(home).join(".config/constellation/config.json");
+            let path = PathBuf::from(home).join(".config/asterisk/config.json");
             if let Some(parent) = path.parent() {
                 let _ = fs::create_dir_all(parent);
             }
             path
         } else {
-            PathBuf::from(".constellation.json")
+            local_path
         }
     }
 
     pub fn load() -> Self {
-        // 1. Try local workspace .constellation.json
-        if let Ok(data) = fs::read_to_string(".constellation.json") {
+        // 1. Try local workspace .asterisk/config.json
+        if let Ok(data) = fs::read_to_string(".asterisk/config.json") {
             if let Ok(cfg) = serde_json::from_str::<AppConfig>(&data) {
                 return cfg;
             }
         }
 
-        // 2. Try ~/.config/constellation/config.json
+        // 2. Try ~/.config/asterisk/config.json
         let p = Self::config_path();
         if let Ok(data) = fs::read_to_string(&p) {
             if let Ok(cfg) = serde_json::from_str::<AppConfig>(&data) {
@@ -71,6 +75,9 @@ impl AppConfig {
 
     pub fn save(&self) -> Result<(), String> {
         let p = Self::config_path();
+        if let Some(parent) = p.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Serialization error: {e}"))?;
         fs::write(&p, json).map_err(|e| format!("Failed to write config {}: {e}", p.display()))?;

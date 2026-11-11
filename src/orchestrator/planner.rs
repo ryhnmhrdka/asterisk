@@ -28,7 +28,7 @@ impl StrategyPlanner {
             "Shannon Entropy Credential Mining (git2 commit history traversal)".to_string(),
             "AST Code Context Reachability Analysis (Tflow = Sinput -> Dsink)".to_string(),
             "Phantom Dependency Detection (SCA manifest cross-audit)".to_string(),
-            "Isolated Worktree Verification Sandbox (.sentinel/worktrees)".to_string(),
+            "Isolated Worktree Verification Sandbox (.asterisk/worktrees)".to_string(),
         ];
 
         if profile.has_docker {

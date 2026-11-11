@@ -273,7 +273,7 @@ impl PortableTool for SandboxPatchTool {
     type Error = RigToolError;
 
     fn description(&self) -> String {
-        "Spawns an isolated git worktree (.sentinel/worktrees/wt-*) to safely dry-run, apply, and verify security patches.".to_string()
+        "Spawns an isolated git worktree (.asterisk/worktrees/wt-*) to safely dry-run, apply, and verify security patches.".to_string()
     }
 
     fn parameters(&self) -> serde_json::Value {

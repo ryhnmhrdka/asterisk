@@ -1,4 +1,4 @@
-# kartikacyber
+# asterisk
 
 an autonomous pre-production code defense & security audit harness in Rust (TUI).
 
@@ -50,7 +50,7 @@ designed with a sleek, classic monochrome aesthetic (opencode style: black, whit
 
 | view | description |
 |---|---|
-| `1 graph` | interactive rataflow DAG canvas with nodes, pan/zoom, and live agent status |
+| `1 flow` | interactive rataflow DAG canvas with nodes, pan/zoom, and live agent status |
 | `2 findings` | clean table of detected vulnerabilities and remediation recommendations |
 | `3 patches` | unified diff review, automated unit tests, with instant apply and rollback |
 | `4 execution` | real-time agent log stream, terminal executions, and self-healing events |
@@ -73,11 +73,11 @@ designed with a sleek, classic monochrome aesthetic (opencode style: black, whit
 
 ```bash
 # run on current directory
-./target/release/constellation
+./target/release/asterisk
 
 # run on specified project repository
-./target/release/constellation /path/to/project
+./target/release/asterisk /path/to/project
 
 # run in headless CI/CD mode
-./target/release/constellation --ci /path/to/project
+./target/release/asterisk --ci /path/to/project
 ```

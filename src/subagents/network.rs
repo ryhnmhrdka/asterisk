@@ -99,6 +99,7 @@ impl NetworkProberAgent {
                                 description: desc.to_string(),
                                 recommendation: rec.to_string(),
                                 patched: false,
+                                ..Default::default()
                             });
                         }
                     }

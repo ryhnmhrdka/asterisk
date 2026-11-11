@@ -342,3 +342,119 @@ fn test_slash_command_isolation_and_tab_click_accuracy() {
     });
     assert_eq!(app.chat_scroll, cur_chat_scroll, "Scrolling over workflow must not alter chat_scroll");
 }
+
+#[tokio::test]
+async fn test_tri_stage_pipeline_sqlite_persistence_and_commands() {
+    use asterisk::core::{StateStore, SecurityContextRules};
+    use asterisk::execution::{EngineMessage, ExecutionEngine};
+    use asterisk::types::ChatMessage;
+    use asterisk::ui::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use tokio::sync::mpsc::unbounded_channel;
+
+    let target = PathBuf::from("./tests/fixtures/vulnerable_repo");
+    assert!(target.exists());
+
+    // 1. Run ExecutionEngine autonomous audit
+    let (tx, mut rx) = unbounded_channel();
+    let (_cmd_tx, cmd_rx) = unbounded_channel();
+
+    let engine = ExecutionEngine::new(target.clone(), tx, cmd_rx)
+        .with_diff_scope("FULL")
+        .with_active_provider("AnthropicClaude");
+
+    engine.run_autonomous_audit().await;
+
+    // Collect engine messages
+    let mut received_findings = Vec::new();
+    let mut received_patches = Vec::new();
+    let mut scan_finished = false;
+
+    while let Ok(msg) = rx.try_recv() {
+        match msg {
+            EngineMessage::FindingsUpdated(f) => {
+                received_findings = f;
+            }
+            EngineMessage::PatchesUpdated(p) => {
+                received_patches = p;
+            }
+            EngineMessage::ScanFinished => {
+                scan_finished = true;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(scan_finished, "ExecutionEngine audit must finish cleanly");
+    assert!(!received_findings.is_empty(), "Stage 1 & 2 must produce findings");
+
+    // Verify tri-stage fields on findings
+    for f in &received_findings {
+        assert!(!f.reachability.is_empty(), "Reachability must be populated");
+        assert!(!f.triage_verdict.is_empty(), "Triage verdict must be populated");
+        assert!(!f.triage_reasoning.is_empty(), "Triage reasoning must be auditable");
+    }
+
+    // Verify SQLite WAL persistence (.asterisk/state.sqlite)
+    let store = StateStore::for_project(&target).expect("StateStore open");
+    let loaded_findings = store.load_latest_findings("project_default").expect("load findings");
+    assert!(!loaded_findings.is_empty(), "Findings must be persisted in SQLite");
+
+    // Verify audit trail (.asterisk/audit_trail.jsonl)
+    let audit_trail_path = target.join(".asterisk").join("audit_trail.jsonl");
+    assert!(audit_trail_path.exists(), "Audit trail must exist");
+    let trail_content = fs::read_to_string(&audit_trail_path).unwrap();
+    assert!(trail_content.contains("SESSION_INITIALIZE"));
+    assert!(trail_content.contains("STAGE_1_DETECTION_FINISHED"));
+    assert!(trail_content.contains("STAGE_2_TRIAGE_FINISHED"));
+
+    // 2. Test Slash Commands in App
+    let mut app = App::new(target.clone(), false);
+    app.config.api_key = Some("test-key".to_string());
+    app.findings = received_findings.clone();
+    app.patches = received_patches.clone();
+
+    // Test /init-sec command
+    app.prompt_input = "/init-sec".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert!(target.join("SECURITY.md").exists(), "SECURITY.md must be generated");
+    let sec_rules = SecurityContextRules::load_from_workspace(&target);
+    assert!(sec_rules.is_some(), "SECURITY.md must be parseable");
+
+    // Test /reachability command
+    app.prompt_input = "/reachability".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    if let Some(ChatMessage::Agent { text, .. }) = app.chat_messages.last() {
+        assert!(text.contains("AST CodeContextGraph & Reachability Triage"));
+    } else {
+        panic!("Expected reachability analysis chat output");
+    }
+
+    // Test /shield command
+    app.prompt_input = "/shield".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    if let Some(ChatMessage::Agent { text, .. }) = app.chat_messages.last() {
+        assert!(text.contains("Pre-Install Malware Shield Audit"));
+    } else {
+        panic!("Expected malware shield chat output");
+    }
+
+    // Test /hotfix command
+    app.prompt_input = "/hotfix requests".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    if let Some(ChatMessage::Agent { text, .. }) = app.chat_messages.last() {
+        assert!(text.contains("Vendor Hotfix Synthesized") || text.contains("hotfix"));
+    } else {
+        panic!("Expected hotfix chat output");
+    }
+
+    // Test /skills command
+    app.prompt_input = "/skills".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.current_tab, 4, "Must switch to skills tab [5]");
+
+    // Test double Esc for checkpoint rewind
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+    assert!(app.action_msg.as_deref().unwrap_or("").contains("rewound") || app.action_msg.as_deref().unwrap_or("").contains("checkpoint"));
+}

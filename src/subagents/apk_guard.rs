@@ -76,6 +76,7 @@ impl ApkAndContainerGuardAgent {
                         description: "android:usesCleartextTraffic='true' allows unencrypted HTTP network communication, exposing app traffic to man-in-the-middle sniffing.".to_string(),
                         recommendation: "Set android:usesCleartextTraffic='false' and enforce TLS/HTTPS via network security config.".to_string(),
                         patched: false,
+                        ..Default::default()
                     });
                 }
             }
@@ -96,6 +97,7 @@ impl ApkAndContainerGuardAgent {
                         description: "android:debuggable='true' allows external attackers and debuggers (jdb) to attach and inspect memory, extract secrets, and manipulate app execution.".to_string(),
                         recommendation: "Remove android:debuggable='true' or set to false for release production builds.".to_string(),
                         patched: false,
+                        ..Default::default()
                     });
                 }
             }
@@ -116,6 +118,7 @@ impl ApkAndContainerGuardAgent {
                         description: "android:allowBackup='true' permits local physical attackers to dump private app data via 'adb backup'.".to_string(),
                         recommendation: "Set android:allowBackup='false' unless an encrypted enterprise backup agent is explicitly implemented.".to_string(),
                         patched: false,
+                        ..Default::default()
                     });
                 }
             }
@@ -167,6 +170,7 @@ impl ApkAndContainerGuardAgent {
                             ),
                             recommendation: "Set android:exported='false' for internal components or enforce signature-level permission requirement.".to_string(),
                             patched: false,
+                            ..Default::default()
                         });
                     }
                     in_component = false;
@@ -194,6 +198,7 @@ impl ApkAndContainerGuardAgent {
                         description: "addJavascriptInterface exposes native Java/Kotlin methods to JavaScript loaded inside WebView. If WebView navigates to untrusted web content, arbitrary native code execution is possible.".to_string(),
                         recommendation: "Validate target URLs before loading into WebView and avoid injecting sensitive native interface methods.".to_string(),
                         patched: false,
+                        ..Default::default()
                     });
                 }
             }
@@ -220,6 +225,7 @@ impl ApkAndContainerGuardAgent {
                     description: "Using unpinned ':latest' base image introduces non-deterministic builds and risks pulling upstream breaking changes or tampered images.".to_string(),
                     recommendation: "Pin base image with explicit SHA256 digest or immutable semver version tag.".to_string(),
                     patched: false,
+                    ..Default::default()
                 });
             }
 
@@ -237,6 +243,7 @@ impl ApkAndContainerGuardAgent {
                         description: "Exposing SSH (22) or unauthenticated Docker daemon (2375) ports inside container creates high-risk remote execution vectors.".to_string(),
                         recommendation: "Remove SSH/Docker daemon port exposition; use container orchestration exec APIs instead.".to_string(),
                         patched: false,
+                        ..Default::default()
                     });
                 }
             }
@@ -263,6 +270,7 @@ impl ApkAndContainerGuardAgent {
                 description: "Container runs as root user by default. A container breakout vulnerability would yield host-level root privileges.".to_string(),
                 recommendation: "Add 'USER appuser' or 'USER 1000:1000' directive before ENTRYPOINT/CMD.".to_string(),
                 patched: false,
+                ..Default::default()
             });
         }
     }
@@ -282,6 +290,7 @@ impl ApkAndContainerGuardAgent {
                     description: "privileged: true disables all Linux namespace and capability security boundaries, granting full kernel capabilities to the container.".to_string(),
                     recommendation: "Remove 'privileged: true' and grant only specific required capabilities via 'cap_add'.".to_string(),
                     patched: false,
+                    ..Default::default()
                 });
             }
             if trimmed.contains("network_mode: \"host\"") || trimmed.contains("network_mode: host") {
@@ -296,6 +305,7 @@ impl ApkAndContainerGuardAgent {
                     description: "network_mode: host bypasses container network isolation, giving container direct access to all host network interfaces.".to_string(),
                     recommendation: "Use user-defined bridge network instead of host networking.".to_string(),
                     patched: false,
+                    ..Default::default()
                 });
             }
         }

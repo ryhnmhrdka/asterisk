@@ -83,6 +83,51 @@ pub struct MailboxMessage {
     pub payload: serde_json::Value,
 }
 
+#[derive(Debug, Clone)]
+pub struct AuditTrailLogger {
+    log_path: PathBuf,
+}
+
+impl AuditTrailLogger {
+    pub fn for_project(project_root: &Path) -> Self {
+        let asterisk_dir = project_root.join(".asterisk");
+        let _ = fs::create_dir_all(&asterisk_dir);
+        Self {
+            log_path: asterisk_dir.join("audit_trail.jsonl"),
+        }
+    }
+
+    pub fn log(
+        &self,
+        session_id: Option<&str>,
+        agent_id: &str,
+        action: &str,
+        policy_decision: &str,
+        details: serde_json::Value,
+    ) -> Result<(), String> {
+        let entry = AuditTrailEntry {
+            timestamp: Utc::now().to_rfc3339(),
+            session_id: session_id.map(|s| s.to_string()),
+            agent_id: agent_id.to_string(),
+            action: action.to_string(),
+            policy_decision: policy_decision.to_string(),
+            details,
+        };
+
+        let line = serde_json::to_string(&entry)
+            .map_err(|e| format!("Failed to serialize audit entry: {e}"))?;
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log_path)
+            .map_err(|e| format!("Failed to open {}: {e}", self.log_path.display()))?;
+
+        writeln!(file, "{line}").map_err(|e| format!("Failed to write audit entry: {e}"))?;
+        Ok(())
+    }
+}
+
 pub struct StateStore {
     conn: Connection,
     base_dir: PathBuf,
@@ -374,6 +419,9 @@ impl StateStore {
             let cat = match f.cwe.as_str() {
                 "CWE-798" | "CWE-200" | "CWE-312" => "SECRET_LEAK",
                 "CWE-1327" | "CWE-942" | "CWE-295" => "CONTAINER_CONFIG",
+                "CWE-489" | "CWE-530" | "CWE-926" | "CWE-749" => "APK_MANIFEST",
+                "CWE-506" => "MALICIOUS_PKG",
+                "CWE-1357" | "CWE-1104" => "PHANTOM_DEP",
                 s if s.starts_with("CVE") => "SCA_CVE",
                 _ => "SAST",
             };
@@ -385,6 +433,18 @@ impl StateStore {
                 Severity::Low => "LOW",
                 Severity::Info => "INFO",
             };
+
+            let reach = match f.reachability.as_str() {
+                "REACHABLE" => "REACHABLE",
+                "UNREACHABLE" => "UNREACHABLE",
+                _ => "POTENTIALLY_REACHABLE",
+            };
+            let triage_v = match f.triage_verdict.as_str() {
+                "FALSE_POSITIVE" => "FALSE_POSITIVE",
+                "PENDING" => "PENDING",
+                _ => "TRUE_POSITIVE",
+            };
+            let triage_r = if f.triage_reasoning.is_empty() { &f.recommendation } else { &f.triage_reasoning };
 
             tx.execute(
                 "INSERT INTO security_findings (finding_id, session_id, agent_id, category, severity, reachability_status, triage_verdict, triage_reasoning, file_path, line_number, call_path_json)
@@ -399,12 +459,17 @@ impl StateStore {
                     agent_id,
                     cat,
                     sev,
-                    "REACHABLE",
-                    "TRUE_POSITIVE",
-                    f.recommendation,
+                    reach,
+                    triage_v,
+                    triage_r,
                     f.file_path.to_string_lossy().to_string(),
                     f.line_number as i64,
-                    serde_json::json!({ "title": f.title, "description": f.description, "snippet": f.snippet }).to_string()
+                    serde_json::json!({
+                        "title": f.title,
+                        "description": f.description,
+                        "snippet": f.snippet,
+                        "call_path": f.call_path
+                    }).to_string()
                 ],
             )
             .map_err(|e| format!("Failed to insert finding {}: {e}", f.id))?;
@@ -421,7 +486,7 @@ impl StateStore {
     ) -> SqlResult<Vec<VulnerabilityFinding>> {
         let mut stmt = self.conn.prepare(
             "SELECT sf.finding_id, sf.category, sf.severity, sf.file_path, sf.line_number, sf.triage_reasoning, sf.call_path_json,
-                    COALESCE(rp.applied_to_main, 0) as patched
+                    COALESCE(rp.applied_to_main, 0) as patched, sf.reachability_status, sf.triage_verdict
              FROM security_findings sf
              JOIN audit_sessions s ON sf.session_id = s.session_id
              LEFT JOIN remediation_patches rp ON sf.finding_id = rp.finding_id
@@ -438,6 +503,8 @@ impl StateStore {
             let recommendation: String = row.get(5)?;
             let call_path_json: String = row.get(6)?;
             let patched_int: i64 = row.get(7)?;
+            let reachability: String = row.get(8)?;
+            let triage_verdict: String = row.get(9)?;
 
             let severity = match sev_str.as_str() {
                 "CRITICAL" => Severity::Critical,
@@ -455,6 +522,14 @@ impl StateStore {
                 .to_string();
             let description = meta["description"].as_str().unwrap_or("").to_string();
             let snippet = meta["snippet"].as_str().unwrap_or("").to_string();
+            let call_path = meta["call_path"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
 
             Ok(VulnerabilityFinding {
                 id,
@@ -465,8 +540,12 @@ impl StateStore {
                 line_number: line_number as usize,
                 snippet,
                 description,
-                recommendation,
+                recommendation: recommendation.clone(),
                 patched: patched_int > 0,
+                reachability,
+                triage_verdict,
+                triage_reasoning: recommendation,
+                call_path,
             })
         })?;
 
@@ -490,6 +569,8 @@ impl StateStore {
                  ON CONFLICT(finding_id) DO UPDATE SET
                     git_diff_content = excluded.git_diff_content,
                     unit_test_script = excluded.unit_test_script,
+                    unit_test_passed = excluded.unit_test_passed,
+                    safe_outputs_passed = excluded.safe_outputs_passed,
                     applied_to_main = excluded.applied_to_main;",
                 params![
                     p.id,
@@ -497,8 +578,8 @@ impl StateStore {
                     "SOURCE_HARDENING",
                     p.unified_diff,
                     p.unit_test_code,
-                    1,
-                    1,
+                    if p.unit_test_passed { 1 } else { 0 },
+                    if p.safe_outputs_passed { 1 } else { 0 },
                     if p.applied { 1 } else { 0 }
                 ],
             )
@@ -658,6 +739,7 @@ mod tests {
             description: "Unsanitized user input concatenated to SQL statement".to_string(),
             recommendation: "Use parameterized queries".to_string(),
             patched: false,
+            ..Default::default()
         }];
         store
             .save_findings("sess_01", "agent_sast", &findings)
@@ -674,6 +756,7 @@ mod tests {
             unit_test_code: "#[test] fn test_patch() {}".to_string(),
             applied: false,
             explanation: "Parameterize query to prevent SQL injection".to_string(),
+            ..Default::default()
         }];
         store.save_patches(&patches).expect("save patches");
 

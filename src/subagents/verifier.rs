@@ -153,6 +153,7 @@ mod tests {
             unit_test_code: "".to_string(),
             applied: false,
             explanation: "".to_string(),
+            ..Default::default()
         };
         let (passed, msg) = VerificationAgent::verify_safe_outputs(&clean_patch);
         assert!(passed, "Clean patch must pass safe outputs: {msg}");
@@ -167,6 +168,7 @@ mod tests {
             unit_test_code: "".to_string(),
             applied: false,
             explanation: "".to_string(),
+            ..Default::default()
         };
         let (passed2, _) = VerificationAgent::verify_safe_outputs(&unsafe_patch);
         assert!(!passed2, "Unsafe patch retaining 0.0.0.0 must be rejected");
@@ -181,6 +183,7 @@ mod tests {
             unit_test_code: "".to_string(),
             applied: false,
             explanation: "".to_string(),
+            ..Default::default()
         };
         let (passed3, _) = VerificationAgent::verify_safe_outputs(&unbalanced_patch);
         assert!(!passed3, "Unbalanced delimiters must be rejected");

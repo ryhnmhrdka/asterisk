@@ -115,6 +115,7 @@ fn inspect_commit_diff(
                         ),
                         recommendation: "Rotate secret token immediately and purge commit history using git-filter-repo or BFG.".to_string(),
                         patched: false,
+                        ..Default::default()
                     });
                 }
             }

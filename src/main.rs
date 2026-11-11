@@ -28,11 +28,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!("asterisk :: autonomous pre-production code defense harness");
         println!("\nusage:");
-        println!("  asterisk                   launch interactive launcher (ascii + target prompt)");
-        println!("  asterisk [path]            run directly on specified local directory");
-        println!("  asterisk --ci [path]       run in headless CI/CD mode (exit code 1 if unpatched issues)");
-        println!("  asterisk --install-hook    install automated .git/hooks/pre-commit defense guard");
-        println!("  asterisk --help            show this help message\n");
+        println!("  asterisk                            launch interactive workspace");
+        println!("  asterisk [path]                     run directly on specified directory");
+        println!("  asterisk --ci [path]                run in headless CI/CD mode");
+        println!("  asterisk --diff-scope=local [path]  scope audit strictly to uncommitted local git changes");
+        println!("  asterisk --apk [path]               include Android APK & container manifest security guard");
+        println!("  asterisk --install-hook             install automated .git/hooks/pre-commit defense guard");
+        println!("  asterisk --help                     show this help message\n");
         return Ok(());
     }
 
@@ -66,8 +68,10 @@ fi
         return Ok(());
     }
 
-    // 3. Headless / CI Mode
+    // 3. Headless / CI Mode & Scoping Flags
     let is_ci_mode = args.iter().any(|a| a == "--ci" || a == "--headless");
+    let is_diff_scope_local = args.iter().any(|a| a == "--diff-scope=local" || a == "--diff-scope");
+    let is_apk_mode = args.iter().any(|a| a == "--apk");
     let explicit_target = args.iter().skip(1).find(|a| !a.starts_with("--")).cloned();
 
     let target_dir = explicit_target
@@ -77,12 +81,16 @@ fi
 
     if is_ci_mode {
         println!("asterisk :: headless ci defense audit running on: {}", target_dir.display());
+        if is_diff_scope_local {
+            println!("  [diff-scope] scoped analysis strictly to uncommitted local git changes");
+        }
         let profile = orchestrator::WorkspaceScanner::scan(&target_dir);
         let secrets = subagents::SecretHunterAgent::scan(&target_dir);
         let sast = subagents::SastAnalyzerAgent::scan(&target_dir);
         let net = subagents::NetworkProberAgent::scan(&target_dir);
         let git_secrets = core::GitHistorySecretMiner::scan_commit_history(&target_dir);
         let sca = core::ScaDependencyAuditor::audit(&target_dir);
+        let malware = subagents::MalwareShieldAgent::scan(&target_dir);
 
         let mut findings = Vec::new();
         findings.extend(secrets);
@@ -90,6 +98,12 @@ fi
         findings.extend(net);
         findings.extend(git_secrets);
         findings.extend(sca);
+        findings.extend(malware);
+
+        if is_apk_mode {
+            let apk = subagents::ApkAndContainerGuardAgent::scan(&target_dir);
+            findings.extend(apk);
+        }
 
         let patches = subagents::AutoHardeningAgent::generate_patches(&target_dir, &findings);
 
@@ -117,6 +131,9 @@ fi
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new(target_dir, false);
+    if is_diff_scope_local {
+        app.diff_scope = "LOCAL_DIFF".to_string();
+    }
 
     'main: loop {
         app.update();

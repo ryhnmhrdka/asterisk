@@ -50,6 +50,43 @@ pub struct VulnerabilityFinding {
     pub description: String,
     pub recommendation: String,
     pub patched: bool,
+    #[serde(default = "default_reachability")]
+    pub reachability: String,
+    #[serde(default = "default_triage_verdict")]
+    pub triage_verdict: String,
+    #[serde(default)]
+    pub triage_reasoning: String,
+    #[serde(default)]
+    pub call_path: Vec<String>,
+}
+
+fn default_reachability() -> String {
+    "POTENTIALLY_REACHABLE".to_string()
+}
+
+fn default_triage_verdict() -> String {
+    "TRUE_POSITIVE".to_string()
+}
+
+impl Default for VulnerabilityFinding {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            title: String::new(),
+            cwe: String::new(),
+            severity: Severity::Medium,
+            file_path: PathBuf::new(),
+            line_number: 0,
+            snippet: String::new(),
+            description: String::new(),
+            recommendation: String::new(),
+            patched: false,
+            reachability: default_reachability(),
+            triage_verdict: default_triage_verdict(),
+            triage_reasoning: String::new(),
+            call_path: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +100,28 @@ pub struct HardeningPatch {
     pub unit_test_code: String,
     pub applied: bool,
     pub explanation: String,
+    #[serde(default)]
+    pub unit_test_passed: bool,
+    #[serde(default)]
+    pub safe_outputs_passed: bool,
+}
+
+impl Default for HardeningPatch {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            finding_id: String::new(),
+            target_file: PathBuf::new(),
+            original_snippet: String::new(),
+            hardened_snippet: String::new(),
+            unified_diff: String::new(),
+            unit_test_code: String::new(),
+            applied: false,
+            explanation: String::new(),
+            unit_test_passed: false,
+            safe_outputs_passed: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -276,6 +335,31 @@ pub const AVAILABLE_COMMANDS: &[CommandSuggestion] = &[
         name: "/export",
         args: "",
         description: "Export defense report to HTML & Markdown",
+    },
+    CommandSuggestion {
+        name: "/init-sec",
+        args: "",
+        description: "Initialize CodeContextGraph & draft SECURITY.md",
+    },
+    CommandSuggestion {
+        name: "/reachability",
+        args: "",
+        description: "Display function reachability & phantom dependency analysis",
+    },
+    CommandSuggestion {
+        name: "/shield",
+        args: "",
+        description: "Run Pre-Install Malware Shield audit",
+    },
+    CommandSuggestion {
+        name: "/hotfix",
+        args: "[pkg]",
+        description: "Generate local library patch ./patches/<pkg>.patch without upgrade",
+    },
+    CommandSuggestion {
+        name: "/skills",
+        args: "[action]",
+        description: "Manage, import, or synthesize 3-tier .skill.md",
     },
     CommandSuggestion {
         name: "/pause",

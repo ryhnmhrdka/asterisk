@@ -126,6 +126,7 @@ impl AutoHardeningAgent {
                     unit_test_code: test_stub,
                     applied: false,
                     explanation,
+                    ..Default::default()
                 });
             }
         }

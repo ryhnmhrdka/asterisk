@@ -1,7 +1,11 @@
 use crate::execution::{EngineCommand, EngineMessage, ExecutionEngine};
 use crate::orchestrator::{AgentGraphBuilder, DefensePlan, WorkspaceScanner};
 use crate::skills::SkillRegistry;
-use crate::subagents::AutoHardeningAgent;
+use crate::core::{
+    AppConfig, PolicyGate, SecurityAgentHub, SecurityContextRules,
+    WorktreeSandbox,
+};
+use crate::subagents::{AutoHardeningAgent, MalwareShieldAgent};
 use crate::types::{
     get_matching_commands, AgentStatus, AiProvider, ChatMessage, DynamicLogEntry, HardeningPatch,
     SproutedNodeInfo, VulnerabilityFinding, WorkspaceProfile,
@@ -23,8 +27,8 @@ use ratatui::{
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use crate::core::{AppConfig, PolicyGate, SecurityAgentHub};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +114,9 @@ pub struct App {
     pub cmd_rx: Option<UnboundedReceiver<EngineCommand>>,
 
     pub click_targets: AppClickTargets,
+    pub diff_scope: String,
+    pub checkpoint: Option<crate::core::sandbox::WorkspaceCheckpoint>,
+    pub last_esc_press: Option<std::time::Instant>,
 }
 
 impl App {
@@ -123,6 +130,7 @@ impl App {
         let skills = SkillRegistry::new();
         let config = AppConfig::load();
         let active_provider = config.provider;
+        let checkpoint = WorktreeSandbox::capture_checkpoint(&initial_target).ok();
 
         Self {
             mode: AppMode::Workspace,
@@ -166,6 +174,9 @@ impl App {
             cmd_tx,
             cmd_rx: Some(cmd_rx),
             click_targets: AppClickTargets::default(),
+            diff_scope: "FULL".to_string(),
+            checkpoint,
+            last_esc_press: None,
         }
     }
 
@@ -259,8 +270,12 @@ impl App {
             new_rx
         });
 
+        let diff_scope = self.diff_scope.clone();
+        let provider_name = self.active_provider.name().to_string();
         tokio::spawn(async move {
-            let engine = ExecutionEngine::new(target, sender, cmd_rx);
+            let engine = ExecutionEngine::new(target, sender, cmd_rx)
+                .with_diff_scope(diff_scope)
+                .with_active_provider(provider_name);
             engine.run_autonomous_audit().await;
         });
     }
@@ -687,6 +702,34 @@ impl App {
 
         match key.code {
             KeyCode::Esc => {
+                let is_double_esc = self
+                    .last_esc_press
+                    .map(|t| t.elapsed() < Duration::from_millis(600))
+                    .unwrap_or(false);
+
+                if is_double_esc {
+                    if let Some(cp) = &self.checkpoint {
+                        match WorktreeSandbox::rewind_to_checkpoint(&self.target_dir, cp) {
+                            Ok(()) => {
+                                self.action_msg = Some("workspace rewound to checkpoint (Esc+Esc)".to_string());
+                                self.chat_messages.push(ChatMessage::Agent {
+                                    sender: "orchestrator".to_string(),
+                                    text: "↩ **Workspace Checkpoint Rewound**: Reverted workspace filesystem state to pre-session checkpoint via double-Escape shortcut.".to_string(),
+                                });
+                            }
+                            Err(e) => {
+                                self.action_msg = Some(format!("rewind error: {e}"));
+                            }
+                        }
+                    } else {
+                        self.action_msg = Some("no checkpoint available to rewind".to_string());
+                    }
+                    self.last_esc_press = None;
+                    return false;
+                } else {
+                    self.last_esc_press = Some(std::time::Instant::now());
+                }
+
                 if !self.prompt_input.is_empty() {
                     self.prompt_input.clear();
                     self.suggestion_index = 0;
@@ -798,6 +841,11 @@ impl App {
                            | Command | Description |\n\
                            | :--- | :--- |\n\
                            | `/scan` | Execute autonomous code defense scan & AST flow |\n\
+                           | `/init-sec` | Initialize CodeContextGraph & draft SECURITY.md |\n\
+                           | `/reachability` | Display function reachability & phantom dependency analysis |\n\
+                           | `/shield` | Run Pre-Install Malware Shield audit |\n\
+                           | `/hotfix [pkg]` | Generate local library patch ./patches/<pkg>.patch without upgrade |\n\
+                           | `/skills [action]` | Manage, import, or synthesize 3-tier .skill.md |\n\
                            | `/model [name]` | Open supported model selector modal or set model |\n\
                            | `/provider [name]` | Open supported provider list or switch provider |\n\
                            | `/custom [url]` | Add & configure custom AI provider endpoint & credentials |\n\
@@ -880,6 +928,115 @@ impl App {
                 self.open_setup_modal(2);
             } else if input == "/config" || input == "/status" || input == "/settings" {
                 self.open_setup_modal(0);
+            } else if input == "/init-sec" || input.starts_with("/init-sec ") {
+                match SecurityContextRules::init_default_file(&self.target_dir, &self.profile) {
+                    Ok(path) => {
+                        self.action_msg = Some("SECURITY.md initialized".to_string());
+                        self.chat_messages.push(ChatMessage::Agent {
+                            sender: "orchestrator".to_string(),
+                            text: format!(
+                                "✓ **SECURITY.md Initialized**: Created default context rules at `{}`.\nConfigure trusted sanitizers and ignored paths to eliminate false positives in AST taint analysis.",
+                                path.display()
+                            ),
+                        });
+                    }
+                    Err(e) => {
+                        self.action_msg = Some(format!("init-sec error: {e}"));
+                    }
+                }
+            } else if input == "/reachability" || input == "reachability" {
+                let reachable_count = self.findings.iter().filter(|f| f.reachability == "REACHABLE").count();
+                let unreachable_count = self.findings.iter().filter(|f| f.reachability == "UNREACHABLE").count();
+                let potentially_count = self.findings.iter().filter(|f| f.reachability == "POTENTIALLY_REACHABLE").count();
+
+                let mut sample_paths = Vec::new();
+                for f in &self.findings {
+                    if !f.call_path.is_empty() {
+                        sample_paths.push(format!("• **{}**: {}", f.id, f.call_path.join(" ➔ ")));
+                        if sample_paths.len() >= 5 {
+                            break;
+                        }
+                    }
+                }
+
+                let paths_str = if sample_paths.is_empty() {
+                    "No multi-hop taint call chains detected in current findings.".to_string()
+                } else {
+                    sample_paths.join("\n")
+                };
+
+                self.chat_messages.push(ChatMessage::Agent {
+                    sender: "graph_core".to_string(),
+                    text: format!(
+                        "### AST CodeContextGraph & Reachability Triage\n\n\
+                         • **Reachable Flows (Blocking)**: {}\n\
+                         • **Unreachable / Sanitized Flows (Pruned)**: {}\n\
+                         • **Signature / Potential Flows**: {}\n\n\
+                         **Taint Call Chains:**\n{}",
+                        reachable_count, unreachable_count, potentially_count, paths_str
+                    ),
+                });
+                self.action_msg = Some("reachability analysis displayed".to_string());
+            } else if input == "/shield" || input == "shield" {
+                let findings = MalwareShieldAgent::scan(&self.target_dir);
+                let count = findings.len();
+                self.chat_messages.push(ChatMessage::Agent {
+                    sender: "malware_shield".to_string(),
+                    text: format!(
+                        "### Pre-Install Malware Shield Audit\n\
+                         Scanned workspace dependencies for typosquatting packages and malicious lifecycle scripts.\n\
+                         • **Suspicious / Malicious Findings**: {}\n{}",
+                        count,
+                        if findings.is_empty() {
+                            "✓ All package manifests & lifecycle hooks clean. No typosquatting detected.".to_string()
+                        } else {
+                            findings.iter().map(|f| format!("• **{}** ({}): {}", f.id, f.cwe, f.title)).collect::<Vec<_>>().join("\n")
+                        }
+                    ),
+                });
+                self.action_msg = Some(format!("malware shield scan: {count} issues"));
+            } else if input == "/hotfix" || input.starts_with("/hotfix ") {
+                let pkg_name = input.strip_prefix("/hotfix ").unwrap_or("").trim();
+                if pkg_name.is_empty() {
+                    self.chat_messages.push(ChatMessage::Agent {
+                        sender: "auto_hardening".to_string(),
+                        text: "Usage: `/hotfix <package_name>`\nGenerates local vendor patch in `./patches/<pkg>.patch` without breaking semver upgrades.".to_string(),
+                    });
+                } else {
+                    match AutoHardeningAgent::generate_vendor_hotfix(&self.target_dir, pkg_name, &self.findings) {
+                        Ok(patch_file) => {
+                            self.action_msg = Some(format!("hotfix patch created: {}", patch_file.display()));
+                            self.chat_messages.push(ChatMessage::Agent {
+                                sender: "auto_hardening".to_string(),
+                                text: format!(
+                                    "✓ **Vendor Hotfix Synthesized**: Generated backport patch at `{}` for package `{}`.\nStored locally in `./patches/` directory.",
+                                    patch_file.display(),
+                                    pkg_name
+                                ),
+                            });
+                        }
+                        Err(e) => {
+                            self.action_msg = Some(format!("hotfix error: {e}"));
+                            self.chat_messages.push(ChatMessage::Agent {
+                                sender: "auto_hardening".to_string(),
+                                text: format!("⚠️ Hotfix generation failed: {e}"),
+                            });
+                        }
+                    }
+                }
+            } else if input == "/skills" || input.starts_with("/skills ") {
+                self.current_tab = 4;
+                let count = self.skills.skills.len();
+                self.chat_messages.push(ChatMessage::Agent {
+                    sender: "orchestrator".to_string(),
+                    text: format!(
+                        "### 3-Tier Interactive Skills Registry\n\
+                         Loaded **{}** progressive disclosure security defense skills.\n\
+                         Switched active view to Tab [5] Skills.",
+                        count
+                    ),
+                });
+                self.action_msg = Some("switched to skills tab".to_string());
             } else {
                 if !self.config.is_api_key_configured() {
                     self.open_setup_modal(2);

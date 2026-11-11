@@ -56,6 +56,7 @@ impl ScaDependencyAuditor {
                     ),
                     recommendation: format!("Pin explicit version for '{module_name}' in project dependency manifest."),
                     patched: false,
+                    ..Default::default()
                 });
             }
         }
@@ -80,6 +81,7 @@ fn audit_cargo_dependencies(content: &str, findings: &mut Vec<VulnerabilityFindi
                 description: "Cargo package configured with insecure cleartext HTTP registry source.".to_string(),
                 recommendation: "Enforce HTTPS URL for all package sources in Cargo configuration.".to_string(),
                 patched: false,
+                ..Default::default()
             });
         }
     }
@@ -103,6 +105,7 @@ fn audit_node_dependencies(content: &str, findings: &mut Vec<VulnerabilityFindin
                 description: "Dependency specifies wildcard ('*') or 'latest' version, exposing builds to breaking upstream changes and supply chain injection.".to_string(),
                 recommendation: "Pin explicit semantic version ranges (e.g. ^1.2.3 or exact 1.2.3) in package.json.".to_string(),
                 patched: false,
+                ..Default::default()
             });
         }
     }
@@ -125,6 +128,7 @@ fn audit_python_dependencies(content: &str, findings: &mut Vec<VulnerabilityFind
                     description: "requirements.txt specifies an unencrypted HTTP package index, exposing pip install to MitM package tampering.".to_string(),
                     recommendation: "Enforce HTTPS for all custom PyPI index URLs.".to_string(),
                     patched: false,
+                    ..Default::default()
                 });
             }
         }

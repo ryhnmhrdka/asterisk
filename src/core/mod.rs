@@ -18,9 +18,10 @@ pub use graph::{CodeContextGraph, ReachabilityVerdict};
 pub use graph::{CodeNode, EdgeKind, NodeKind};
 pub use jail::ProjectJail;
 pub use policy::{GateDecision, PolicyGate};
+#[allow(unused_imports)]
 pub use sandbox::WorktreeSandbox;
 pub use sca::ScaDependencyAuditor;
 #[allow(unused_imports)]
 pub use security_md::SecurityContextRules;
 #[allow(unused_imports)]
-pub use storage::StateStore;
+pub use storage::{AuditTrailLogger, StateStore};

@@ -7,6 +7,7 @@ pub mod policy;
 pub mod rig_tools;
 pub mod sandbox;
 pub mod sca;
+pub mod storage;
 
 pub use agent::SecurityAgentHub;
 pub use config::AppConfig;
@@ -18,3 +19,5 @@ pub use jail::ProjectJail;
 pub use policy::{GateDecision, PolicyGate};
 pub use sandbox::WorktreeSandbox;
 pub use sca::ScaDependencyAuditor;
+#[allow(unused_imports)]
+pub use storage::StateStore;

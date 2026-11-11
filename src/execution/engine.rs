@@ -1,7 +1,8 @@
 use crate::core::{
     storage::{AuditSessionRecord, ProjectRecord, SubAgentRunRecord},
-    AuditTrailLogger, CodeContextGraph, GateDecision, GitHistorySecretMiner, PolicyGate,
-    ProjectJail, ReachabilityVerdict, ScaDependencyAuditor, SecurityContextRules, StateStore,
+    AppConfig, AuditTrailLogger, CodeContextGraph, GateDecision, GitHistorySecretMiner, PolicyGate,
+    ProjectJail, ReachabilityVerdict, ScaDependencyAuditor, SecurityAgentHub, SecurityContextRules,
+    StateStore,
 };
 use crate::orchestrator::{DefensePlan, StrategyPlanner, WorkspaceScanner};
 use crate::skills::SkillRegistry;
@@ -14,6 +15,7 @@ use crate::types::{
     WorkspaceProfile,
 };
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 #[allow(dead_code)]
@@ -44,6 +46,7 @@ pub struct ExecutionEngine {
     _cmd_rx: UnboundedReceiver<EngineCommand>,
     diff_scope: String,
     active_provider: String,
+    config: Option<AppConfig>,
 }
 
 impl ExecutionEngine {
@@ -58,6 +61,7 @@ impl ExecutionEngine {
             _cmd_rx: cmd_rx,
             diff_scope: "FULL".to_string(),
             active_provider: "AnthropicClaude".to_string(),
+            config: None,
         }
     }
 
@@ -70,6 +74,12 @@ impl ExecutionEngine {
     #[allow(dead_code)]
     pub fn with_active_provider(mut self, provider: impl Into<String>) -> Self {
         self.active_provider = provider.into();
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn with_config(mut self, config: AppConfig) -> Self {
+        self.config = Some(config);
         self
     }
 
@@ -396,6 +406,43 @@ impl ExecutionEngine {
                 "patches_verified": patches.iter().filter(|p| p.safe_outputs_passed).count(),
             }),
         );
+
+        // Optional Live AI Agent Evaluation (When configured with valid credentials)
+        if let Some(cfg) = &self.config {
+            if cfg.is_api_key_configured() {
+                let hub = SecurityAgentHub::new(
+                    self.target_dir.clone(),
+                    Arc::new(PolicyGate::default()),
+                    cfg.clone(),
+                );
+                send_chat(
+                    &self.sender,
+                    ChatMessage::Thinking {
+                        agent: "orchestrator".to_string(),
+                        thought: format!(
+                            "Performing autonomous AI threat analysis via {} (model: {})...",
+                            cfg.provider.name(),
+                            cfg.get_model()
+                        ),
+                    },
+                );
+                let query = format!(
+                    "Autonomous code defense triage completed for {}. Total files: {}. Identified {} findings, {} verified patches. Provide executive risk assessment.",
+                    self.target_dir.display(),
+                    profile.total_files,
+                    all_findings.len(),
+                    patches.iter().filter(|p| p.safe_outputs_passed).count()
+                );
+                let ai_reply = hub.query(&query).await;
+                send_chat(
+                    &self.sender,
+                    ChatMessage::Agent {
+                        sender: format!("ai_triage:{}", cfg.get_model()),
+                        text: ai_reply,
+                    },
+                );
+            }
+        }
 
         // 6. Defense Gate Evaluation (Filtered by Tri-Stage Triage)
         let blocking_findings: Vec<&VulnerabilityFinding> = all_findings

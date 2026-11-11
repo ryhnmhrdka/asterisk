@@ -247,7 +247,15 @@ impl App {
 
         if !self.config.is_api_key_configured() {
             self.open_key_modal();
-            self.action_msg = Some("API key required to execute defense workflow.".to_string());
+            self.action_msg = Some("authentication required: please set API key to run scan.".to_string());
+            self.chat_messages.push(ChatMessage::Agent {
+                sender: "orchestrator".to_string(),
+                text: format!(
+                    "⚠️ **Defense scan blocked**: No API key configured for **{}**.\n\
+                     Autonomous audit and models cannot be accessed until credentials are configured. Please enter your API key to proceed.",
+                    self.active_provider.name()
+                ),
+            });
             return;
         }
 
@@ -272,10 +280,12 @@ impl App {
 
         let diff_scope = self.diff_scope.clone();
         let provider_name = self.active_provider.name().to_string();
+        let config = self.config.clone();
         tokio::spawn(async move {
             let engine = ExecutionEngine::new(target, sender, cmd_rx)
                 .with_diff_scope(diff_scope)
-                .with_active_provider(provider_name);
+                .with_active_provider(provider_name)
+                .with_config(config);
             engine.run_autonomous_audit().await;
         });
     }
@@ -524,54 +534,69 @@ impl App {
     }
 
     fn handle_model_key(&mut self, key: KeyEvent) -> bool {
-        match key.code {
-            KeyCode::Esc => {
-                self.show_key_modal = false;
-                self.active_modal = ActiveModal::None;
-                false
-            }
-            KeyCode::Up => {
-                let presets = self.active_provider.preset_models();
-                if !presets.is_empty() {
-                    if self.selected_model_index == 0 {
-                        self.selected_model_index = presets.len() - 1;
-                    } else {
-                        self.selected_model_index -= 1;
-                    }
-                    self.model_modal_input = presets[self.selected_model_index].to_string();
-                }
-                false
-            }
-            KeyCode::Down | KeyCode::Tab => {
-                let presets = self.active_provider.preset_models();
-                if !presets.is_empty() {
-                    self.selected_model_index = (self.selected_model_index + 1) % presets.len();
-                    self.model_modal_input = presets[self.selected_model_index].to_string();
-                }
-                false
-            }
-            KeyCode::Enter => {
-                let presets = self.active_provider.preset_models();
-                let chosen = if let Some(m) = presets.get(self.selected_model_index) {
-                    m.to_string()
-                } else {
-                    self.active_provider.default_model().to_string()
-                };
-                self.config.provider = self.active_provider;
-                self.config.model = Some(chosen.clone());
-                self.model_modal_input = chosen.clone();
-
-                if self.config.requires_api_key() && !self.config.is_api_key_configured() {
-                    self.open_key_modal();
-                } else {
-                    let _ = self.config.save();
+        if self.config.requires_api_key() && !self.config.is_api_key_configured() {
+            match key.code {
+                KeyCode::Esc => {
                     self.show_key_modal = false;
                     self.active_modal = ActiveModal::None;
-                    self.action_msg = Some(format!("provider & model set to {} / {chosen}.", self.active_provider.name()));
+                    false
                 }
-                false
+                KeyCode::Enter => {
+                    self.open_key_modal();
+                    false
+                }
+                _ => false,
             }
-            _ => false,
+        } else {
+            match key.code {
+                KeyCode::Esc => {
+                    self.show_key_modal = false;
+                    self.active_modal = ActiveModal::None;
+                    false
+                }
+                KeyCode::Up => {
+                    let presets = self.active_provider.preset_models();
+                    if !presets.is_empty() {
+                        if self.selected_model_index == 0 {
+                            self.selected_model_index = presets.len() - 1;
+                        } else {
+                            self.selected_model_index -= 1;
+                        }
+                        self.model_modal_input = presets[self.selected_model_index].to_string();
+                    }
+                    false
+                }
+                KeyCode::Down | KeyCode::Tab => {
+                    let presets = self.active_provider.preset_models();
+                    if !presets.is_empty() {
+                        self.selected_model_index = (self.selected_model_index + 1) % presets.len();
+                        self.model_modal_input = presets[self.selected_model_index].to_string();
+                    }
+                    false
+                }
+                KeyCode::Enter => {
+                    let presets = self.active_provider.preset_models();
+                    let chosen = if let Some(m) = presets.get(self.selected_model_index) {
+                        m.to_string()
+                    } else {
+                        self.active_provider.default_model().to_string()
+                    };
+                    self.config.provider = self.active_provider;
+                    self.config.model = Some(chosen.clone());
+                    self.model_modal_input = chosen.clone();
+
+                    if self.config.requires_api_key() && !self.config.is_api_key_configured() {
+                        self.open_key_modal();
+                    } else {
+                        let _ = self.config.save();
+                        self.show_key_modal = false;
+                        self.active_modal = ActiveModal::None;
+                        self.action_msg = Some(format!("provider & model set to {} / {chosen}.", self.active_provider.name()));
+                    }
+                    false
+                }
+                _ => false,
+            }
         }
     }
 
@@ -868,10 +893,23 @@ impl App {
             } else if input == "/model" || input == "model" {
                 self.open_provider_model_modal(1);
             } else if let Some(model_str) = input.strip_prefix("/model ") {
-                let model = model_str.trim().to_string();
-                self.config.model = Some(model.clone());
-                let _ = self.config.save();
-                self.action_msg = Some(format!("model configured: {model}"));
+                if self.config.requires_api_key() && !self.config.is_api_key_configured() {
+                    self.open_key_modal();
+                    self.action_msg = Some("authentication required: set API key before configuring model.".to_string());
+                    self.chat_messages.push(ChatMessage::Agent {
+                        sender: "orchestrator".to_string(),
+                        text: format!(
+                            "⚠️ **Cannot Configure Model**: No API key configured for **{}**.\n\
+                             Models cannot be accessed without valid credentials. Please enter your API key first.",
+                            self.active_provider.name()
+                        ),
+                    });
+                } else {
+                    let model = model_str.trim().to_string();
+                    self.config.model = Some(model.clone());
+                    let _ = self.config.save();
+                    self.action_msg = Some(format!("model configured: {model}"));
+                }
             } else if input == "/pause" || input == "pause" {
                 self.toggle_pause_selected_node();
             } else if input == "/apply" || input == "apply" || input == "a" {
@@ -1259,12 +1297,6 @@ impl App {
                         return;
                     }
                 }
-                if let Some(btn_send) = sidebar_targets.btn_send {
-                    if in_rect(btn_send, col, row) {
-                        self.submit_prompt_input();
-                        return;
-                    }
-                }
 
                 // Command autocomplete suggestion click
                 for (cmd_name, cmd_args, row_rect) in &sidebar_targets.suggestion_rows {
@@ -1373,6 +1405,7 @@ impl App {
                         area,
                         self.active_provider,
                         self.selected_model_index,
+                        self.config.is_api_key_configured(),
                     )
                 }
                 ActiveModal::ApiKeyInput => {

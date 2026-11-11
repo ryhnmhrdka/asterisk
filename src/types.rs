@@ -185,6 +185,10 @@ impl AiProvider {
         }
     }
 
+    pub fn requires_api_key(&self) -> bool {
+        *self != AiProvider::OllamaLocal
+    }
+
     pub fn preset_models(&self) -> &'static [&'static str] {
         match self {
             AiProvider::AnthropicClaude => &[

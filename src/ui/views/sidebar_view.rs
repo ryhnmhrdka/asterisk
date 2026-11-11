@@ -14,7 +14,6 @@ pub struct SidebarClickTargets {
     pub btn_cancel: Option<Rect>,
     pub btn_pause: Option<Rect>,
     pub btn_apply: Option<Rect>,
-    pub btn_send: Option<Rect>,
     pub subagent_rows: Vec<(String, Rect)>,
     pub user_msg_expand: Vec<(usize, Rect)>,
     pub suggestion_rows: Vec<(&'static str, &'static str, Rect)>,
@@ -36,8 +35,8 @@ impl SidebarView {
         expanded_messages: &HashSet<usize>,
         has_patches: bool,
     ) -> SidebarClickTargets {
-        let est_input_width = area.width.saturating_sub(12);
-        let wrap_width = (est_input_width.saturating_sub(5) as usize).max(10);
+        let est_input_width = area.width;
+        let wrap_width = (est_input_width.saturating_sub(6) as usize).max(10);
 
         let display_lines = if prompt_input.is_empty() {
             if awaiting_confirmation {
@@ -98,7 +97,6 @@ impl SidebarView {
             btn_cancel: None,
             btn_pause: None,
             btn_apply: None,
-            btn_send: None,
             subagent_rows: Vec::new(),
             user_msg_expand: Vec::new(),
             suggestion_rows: Vec::new(),
@@ -403,26 +401,16 @@ impl SidebarView {
             targets.btn_cancel = Some(btn_canc_rect);
         }
 
-        // 4. Interactive Chatbot Input Bar AT BOTTOM with Clickable [ Send ↵ ] Button
+        // 4. Interactive Chatbot Input Bar AT BOTTOM (Full width, Enter to send)
         let prompt_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(input_box_height), // 1. Input Box & Send button
+                Constraint::Length(input_box_height), // 1. Input Box
                 Constraint::Length(1),                // 2. Clean hotkey hint line
             ])
             .split(chunks[3]);
 
-        let input_split = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Min(10),
-                Constraint::Length(1),  // Quiet spacer
-                Constraint::Length(10), // Send button
-            ])
-            .split(prompt_chunks[0]);
-
-        let input_rect = input_split[0];
-        let send_rect = input_split[2];
+        let input_rect = prompt_chunks[0];
 
         let prompt_block = Block::default()
             .style(Style::default().bg(Color::Rgb(24, 25, 31)));
@@ -432,14 +420,6 @@ impl SidebarView {
             .scroll((scroll_y, 0))
             .block(prompt_block);
         f.render_widget(prompt_paragraph, input_rect);
-
-        // [ Send ↵ ] Button (Sleek filled pill, NO borders)
-        let send_block = Block::default()
-            .style(Style::default().bg(Color::White));
-        let send_text = Line::from(Span::styled(" Send ↵ ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)));
-        f.render_widget(Paragraph::new(send_text).centered().block(send_block), send_rect);
-
-        targets.btn_send = Some(send_rect);
 
         // Subtitle hint row beneath input box
         let hint_line = Line::from(vec![
@@ -459,7 +439,7 @@ impl SidebarView {
         if !suggestions.is_empty() {
             let visible_count = suggestions.len().min(6);
             let popup_height = (visible_count + 2) as u16;
-            let popup_width = input_rect.width + send_rect.width + 1;
+            let popup_width = input_rect.width;
             let popup_y = input_rect.y.saturating_sub(popup_height);
             let popup_rect = Rect::new(input_rect.x, popup_y, popup_width, popup_height);
 

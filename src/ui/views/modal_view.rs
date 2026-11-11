@@ -158,10 +158,16 @@ impl ModalView {
         area: Rect,
         active_provider: AiProvider,
         selected_index: usize,
+        has_api_key: bool,
     ) -> ModalClickTargets {
-        let presets = active_provider.preset_models();
-        let list_len = presets.len().max(1);
-        let modal_width = 56.min(area.width.saturating_sub(4));
+        let is_locked = !has_api_key && active_provider.requires_api_key();
+        let presets = if is_locked {
+            &[]
+        } else {
+            active_provider.preset_models()
+        };
+        let list_len = presets.len().max(if is_locked { 3 } else { 1 });
+        let modal_width = 58.min(area.width.saturating_sub(4));
         let modal_height = ((list_len + 5) as u16).min(area.height.saturating_sub(2)).max(9);
 
         let x = (area.width.saturating_sub(modal_width)) / 2;
@@ -173,7 +179,7 @@ impl ModalView {
         let bg_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Rgb(50, 52, 64)))
+            .border_style(Style::default().fg(if is_locked { Color::Rgb(100, 70, 70) } else { Color::Rgb(50, 52, 64) }))
             .title(Span::styled(
                 title_text,
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
@@ -185,7 +191,7 @@ impl ModalView {
             .direction(Direction::Vertical)
             .margin(1)
             .constraints([
-                Constraint::Min(4),    // List of models
+                Constraint::Min(4),    // List of models / status
                 Constraint::Length(1), // Footer hotkeys
             ])
             .split(modal_rect);
@@ -201,38 +207,63 @@ impl ModalView {
 
         let mut lines = Vec::new();
         let list_area = inner_chunks[0];
-        let mut row_y = list_area.y;
 
-        for (i, model_name) in presets.iter().enumerate() {
-            let is_sel = i == selected_index;
-            let item_rect = Rect::new(list_area.x, row_y, list_area.width, 1);
-            targets.model_preset_buttons.push((model_name.to_string(), item_rect));
-            row_y += 1;
+        if is_locked {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled("⚠️  No API Key Configured", Style::default().fg(Color::Rgb(255, 180, 100)).add_modifier(Modifier::BOLD)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw("    "),
+                Span::styled("Models are locked and cannot be accessed yet.", Style::default().fg(Color::Rgb(150, 152, 160))),
+            ]));
+            lines.push(Line::raw(""));
+            lines.push(Line::from(vec![
+                Span::styled("  ▸ Press [Enter] to configure API Key", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            ]));
+        } else {
+            let mut row_y = list_area.y;
+            for (i, model_name) in presets.iter().enumerate() {
+                let is_sel = i == selected_index;
+                let item_rect = Rect::new(list_area.x, row_y, list_area.width, 1);
+                targets.model_preset_buttons.push((model_name.to_string(), item_rect));
+                row_y += 1;
 
-            if is_sel {
-                lines.push(Line::from(vec![
-                    Span::styled("  ▸ ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("{:<width$}", model_name, width = (list_area.width.saturating_sub(6)) as usize), Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
-                ]));
-            } else {
-                lines.push(Line::from(vec![
-                    Span::raw("    "),
-                    Span::styled(*model_name, Style::default().fg(Color::Rgb(175, 178, 188))),
-                ]));
+                if is_sel {
+                    lines.push(Line::from(vec![
+                        Span::styled("  ▸ ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
+                        Span::styled(format!("{:<width$}", model_name, width = (list_area.width.saturating_sub(6)) as usize), Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
+                    ]));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::raw("    "),
+                        Span::styled(*model_name, Style::default().fg(Color::Rgb(175, 178, 188))),
+                    ]));
+                }
             }
         }
         f.render_widget(Paragraph::new(lines), list_area);
 
         // Footer
-        let footer_line = Line::from(vec![
-            Span::raw("  "),
-            Span::styled("[↑/↓]", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
-            Span::styled(" Select   ", Style::default().fg(Color::Rgb(110, 112, 120))),
-            Span::styled("[Enter]", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
-            Span::styled(" Confirm   ", Style::default().fg(Color::Rgb(110, 112, 120))),
-            Span::styled("[Esc]", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
-            Span::styled(" Close", Style::default().fg(Color::Rgb(110, 112, 120))),
-        ]);
+        let footer_line = if is_locked {
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled("[Enter]", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
+                Span::styled(" Setup Key   ", Style::default().fg(Color::Rgb(110, 112, 120))),
+                Span::styled("[Esc]", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
+                Span::styled(" Cancel", Style::default().fg(Color::Rgb(110, 112, 120))),
+            ])
+        } else {
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled("[↑/↓]", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
+                Span::styled(" Select   ", Style::default().fg(Color::Rgb(110, 112, 120))),
+                Span::styled("[Enter]", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
+                Span::styled(" Confirm   ", Style::default().fg(Color::Rgb(110, 112, 120))),
+                Span::styled("[Esc]", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
+                Span::styled(" Close", Style::default().fg(Color::Rgb(110, 112, 120))),
+            ])
+        };
         f.render_widget(Paragraph::new(footer_line), inner_chunks[1]);
 
         targets

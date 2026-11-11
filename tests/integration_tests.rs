@@ -458,3 +458,90 @@ async fn test_tri_stage_pipeline_sqlite_persistence_and_commands() {
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
     assert!(app.action_msg.as_deref().unwrap_or("").contains("rewound") || app.action_msg.as_deref().unwrap_or("").contains("checkpoint"));
 }
+
+#[test]
+fn test_remove_send_button_and_unauthenticated_model_scan_gate() {
+    use asterisk::types::{AiProvider, ChatMessage};
+    use asterisk::ui::app::ActiveModal;
+    use asterisk::ui::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut app = App::new(PathBuf::from("."), false);
+    app.config.api_key = None;
+    app.config.provider = AiProvider::AnthropicClaude;
+
+    // 1. Verify prompt bar rendering without Send button (renders full width)
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| app.render(f)).unwrap();
+
+    // 2. /scan without key must not execute dummy scan; findings and flow stay empty!
+    assert!(app.findings.is_empty(), "Findings must start empty");
+    assert!(app.patches.is_empty(), "Patches must start empty");
+    assert!(app.nodes_info.is_empty(), "Nodes must start empty");
+    assert!(!app.is_running);
+
+    app.prompt_input = "/scan".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+    assert!(!app.is_running, "Scan must not run without configured API key");
+    assert!(app.show_key_modal, "Must open key modal");
+    assert_eq!(app.active_modal, ActiveModal::ApiKeyInput);
+    assert!(app.findings.is_empty(), "Findings must remain empty without key");
+    assert!(app.patches.is_empty(), "Patches must remain empty without key");
+    assert!(app.nodes_info.is_empty(), "Graph nodes must remain empty without key");
+
+    // Chat message explains blocking reason
+    if let Some(ChatMessage::Agent { text, .. }) = app.chat_messages.last() {
+        assert!(text.contains("Defense scan blocked") && text.contains("No API key configured"));
+    } else {
+        panic!("Expected blocking chat message for unauthenticated /scan");
+    }
+
+    // Dismiss key modal
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+    assert!(!app.show_key_modal);
+
+    // 3. /model <name> without key must block setting model
+    app.prompt_input = "/model claude-3-7-sonnet".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert!(app.show_key_modal);
+    assert_eq!(app.active_modal, ActiveModal::ApiKeyInput);
+    assert_ne!(app.config.model.as_deref(), Some("claude-3-7-sonnet"), "Model must NOT be set without key");
+
+    // Dismiss key modal
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+    assert!(!app.show_key_modal);
+
+    // 4. /model opens modal; without key, model presets are locked / empty
+    app.prompt_input = "/model".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert!(app.show_key_modal);
+    assert_eq!(app.active_modal, ActiveModal::SelectModel);
+
+    // Render modal frame to inspect click targets
+    terminal.draw(|f| app.render(f)).unwrap();
+    assert!(app.click_targets.modal.as_ref().unwrap().model_preset_buttons.is_empty(), "Model presets must be empty/locked without API key");
+
+    // Pressing Enter in locked SelectModel modal advances to ApiKeyInput
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::ApiKeyInput);
+
+    // 5. Setting valid API key unlocks model selector
+    app.handle_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::empty()));
+    app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::empty()));
+    app.handle_key(KeyEvent::new(KeyCode::Char('-'), KeyModifiers::empty()));
+    app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::empty()));
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert!(!app.show_key_modal);
+    assert!(app.config.is_api_key_configured());
+
+    // Now /model opens unlocked model selector with presets
+    app.prompt_input = "/model".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::SelectModel);
+    terminal.draw(|f| app.render(f)).unwrap();
+    assert!(!app.click_targets.modal.as_ref().unwrap().model_preset_buttons.is_empty(), "Model presets must be populated once authenticated");
+}

@@ -1,5 +1,6 @@
 use crate::types::AiProvider;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -10,6 +11,14 @@ pub struct AppConfig {
     pub model: Option<String>,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
+    #[serde(default)]
+    pub provider_keys: HashMap<String, String>,
+    #[serde(default)]
+    pub provider_base_urls: HashMap<String, String>,
+    #[serde(default)]
+    pub discovered_models: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    pub custom_provider_name: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -19,6 +28,10 @@ impl Default for AppConfig {
             model: None,
             api_key: None,
             base_url: None,
+            provider_keys: HashMap::new(),
+            provider_base_urls: HashMap::new(),
+            discovered_models: HashMap::new(),
+            custom_provider_name: None,
         }
     }
 }
@@ -98,15 +111,30 @@ impl AppConfig {
         self.provider.default_model().to_string()
     }
 
-    pub fn get_api_key(&self) -> Option<String> {
-        if let Some(k) = &self.api_key {
+    pub fn get_api_key_for_provider(&self, provider: AiProvider) -> Option<String> {
+        if let Some(k) = self.provider_keys.get(provider.name()) {
+            let trimmed = k.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+        if let Some(k) = self.provider_keys.get(&format!("{:?}", provider)) {
             let trimmed = k.trim();
             if !trimmed.is_empty() {
                 return Some(trimmed.to_string());
             }
         }
 
-        match self.provider {
+        if self.provider == provider {
+            if let Some(k) = &self.api_key {
+                let trimmed = k.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+
+        match provider {
             AiProvider::AnthropicClaude => env::var("ANTHROPIC_API_KEY").ok(),
             AiProvider::OpenAiGpt4o => env::var("OPENAI_API_KEY").ok(),
             AiProvider::GoogleGemini => env::var("GEMINI_API_KEY").ok(),
@@ -117,28 +145,73 @@ impl AppConfig {
                 .ok(),
             AiProvider::OllamaLocal => None,
         }
+        .and_then(|k| {
+            let trimmed = k.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        })
     }
 
-    pub fn get_base_url(&self) -> Option<String> {
-        if let Some(u) = &self.base_url {
+    pub fn is_provider_configured(&self, provider: AiProvider) -> bool {
+        if !provider.requires_api_key() {
+            return true;
+        }
+        self.get_api_key_for_provider(provider).is_some()
+    }
+
+    pub fn get_api_key(&self) -> Option<String> {
+        self.get_api_key_for_provider(self.provider)
+    }
+
+    pub fn get_base_url_for_provider(&self, provider: AiProvider) -> Option<String> {
+        if let Some(u) = self.provider_base_urls.get(provider.name()) {
+            let trimmed = u.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+        if let Some(u) = self.provider_base_urls.get(&format!("{:?}", provider)) {
             let trimmed = u.trim();
             if !trimmed.is_empty() {
                 return Some(trimmed.to_string());
             }
         }
 
-        if let Ok(u) = env::var("OPENAI_BASE_URL") {
-            if !u.trim().is_empty() {
-                return Some(u.trim().to_string());
-            }
-        }
-        if let Ok(u) = env::var("AI_BASE_URL") {
-            if !u.trim().is_empty() {
-                return Some(u.trim().to_string());
+        if self.provider == provider {
+            if let Some(u) = &self.base_url {
+                let trimmed = u.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
             }
         }
 
-        self.provider.default_base_url().map(|s| s.to_string())
+        match provider {
+            AiProvider::OpenAiGpt4o | AiProvider::Custom => {
+                if let Ok(u) = env::var("OPENAI_BASE_URL") {
+                    let trimmed = u.trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed.to_string());
+                    }
+                }
+                if let Ok(u) = env::var("AI_BASE_URL") {
+                    let trimmed = u.trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        provider.default_base_url().map(|s| s.to_string())
+    }
+
+    pub fn get_base_url(&self) -> Option<String> {
+        self.get_base_url_for_provider(self.provider)
     }
 
     pub fn requires_api_key(&self) -> bool {
@@ -153,16 +226,62 @@ impl AppConfig {
     }
 
     #[allow(dead_code)]
-    pub fn mask_key(&self) -> String {
-        match self.get_api_key() {
+    pub fn mask_key_for_provider(&self, provider: AiProvider) -> String {
+        if provider == AiProvider::OllamaLocal {
+            return "Not Required (Offline Local)".to_string();
+        }
+        match self.get_api_key_for_provider(provider) {
             Some(k) if k.len() > 8 => {
                 let prefix = &k[..4];
                 let suffix = &k[k.len() - 4..];
-                format!("{prefix}••••{suffix}")
+                format!("{prefix}••••••••{suffix}")
             }
-            Some(_) => "••••••••".to_string(),
-            None => "None (Unset)".to_string(),
+            Some(k) if !k.is_empty() => "••••••••".to_string(),
+            _ => "None (Unset)".to_string(),
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn mask_key(&self) -> String {
+        self.mask_key_for_provider(self.provider)
+    }
+
+    pub fn get_models_for_provider(&self, provider: AiProvider) -> Vec<String> {
+        if let Some(list) = self.discovered_models.get(provider.name()) {
+            if !list.is_empty() {
+                return list.clone();
+            }
+        }
+        if let Some(list) = self.discovered_models.get(&format!("{:?}", provider)) {
+            if !list.is_empty() {
+                return list.clone();
+            }
+        }
+        provider.preset_models().iter().map(|s| s.to_string()).collect()
+    }
+
+    pub fn has_discovered_models(&self, provider: AiProvider) -> bool {
+        self.discovered_models
+            .get(provider.name())
+            .map(|l| !l.is_empty())
+            .unwrap_or(false)
+            || self
+                .discovered_models
+                .get(&format!("{:?}", provider))
+                .map(|l| !l.is_empty())
+                .unwrap_or(false)
+    }
+
+    pub fn get_provider_display_name(&self, provider: AiProvider) -> String {
+        if provider == AiProvider::Custom {
+            if let Some(name) = &self.custom_provider_name {
+                let trimmed = name.trim();
+                if !trimmed.is_empty() {
+                    return format!("Custom ({trimmed})");
+                }
+            }
+        }
+        provider.name().to_string()
     }
 }
 

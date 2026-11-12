@@ -3,7 +3,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 
@@ -52,6 +52,6 @@ impl LogsView {
             ]));
         }
 
-        f.render_widget(Paragraph::new(lines).block(block), area);
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block), area);
     }
 }

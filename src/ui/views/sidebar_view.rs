@@ -1,4 +1,5 @@
 use crate::types::{get_matching_commands, AgentStatus, ChatMessage, SproutedNodeInfo};
+use crate::ui::fit::{ellipsize, hint_line};
 use crate::ui::markdown::parse_markdown;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -356,12 +357,12 @@ impl SidebarView {
             let lines = vec![
                 Line::from(vec![
                     Span::styled("  module: ", Style::default().fg(Color::Rgb(110, 112, 120))),
-                    Span::styled(&node.id, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Span::styled(ellipsize(&node.id, (node_area.width as usize).saturating_sub(28).max(8)), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
                     Span::styled(format!("  [{status_str}]"), Style::default().fg(if node.is_paused { Color::Rgb(140, 142, 150) } else { Color::White })),
                 ]),
                 Line::from(vec![
                     Span::styled("  target: ", Style::default().fg(Color::Rgb(110, 112, 120))),
-                    Span::styled(node.target_path.as_deref().unwrap_or("-"), Style::default().fg(Color::White)),
+                    Span::styled(crate::ui::fit::ellipsize_start(node.target_path.as_deref().unwrap_or("-"), (node_area.width as usize).saturating_sub(12).max(8)), Style::default().fg(Color::White)),
                 ]),
                 Line::from(action_spans),
             ];
@@ -388,13 +389,25 @@ impl SidebarView {
             let conf_block = Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::White));
-            let conf_text = Line::from(Span::styled(" [ ✓ Execute Review ] ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)));
+            let inner_bw = btn_conf_rect.width.saturating_sub(2) as usize;
+            let conf_label = [" [ ✓ Execute Review ] ", " [✓ Execute] ", " ✓ Run ", " ✓ "]
+                .iter()
+                .find(|l| l.chars().count() <= inner_bw)
+                .copied()
+                .unwrap_or(" ✓ ");
+            let conf_text = Line::from(Span::styled(conf_label, Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)));
             f.render_widget(Paragraph::new(conf_text).centered().block(conf_block), btn_conf_rect);
 
             let canc_block = Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Rgb(80, 80, 85)));
-            let canc_text = Line::from(Span::styled(" [ ✗ Cancel ] ", Style::default().fg(Color::Rgb(150, 150, 155))));
+            let inner_cw = btn_canc_rect.width.saturating_sub(2) as usize;
+            let canc_label = [" [ ✗ Cancel ] ", " [✗ Cancel] ", " ✗ Esc ", " ✗ "]
+                .iter()
+                .find(|l| l.chars().count() <= inner_cw)
+                .copied()
+                .unwrap_or(" ✗ ");
+            let canc_text = Line::from(Span::styled(canc_label, Style::default().fg(Color::Rgb(150, 150, 155))));
             f.render_widget(Paragraph::new(canc_text).centered().block(canc_block), btn_canc_rect);
 
             targets.btn_confirm = Some(btn_conf_rect);
@@ -422,16 +435,13 @@ impl SidebarView {
         f.render_widget(prompt_paragraph, input_rect);
 
         // Subtitle hint row beneath input box
-        let hint_line = Line::from(vec![
-            Span::raw("  "),
-            Span::styled("type ", Style::default().fg(Color::Rgb(85, 87, 95))),
-            Span::styled("/", Style::default().fg(Color::Rgb(140, 180, 255))),
-            Span::styled(" for commands  •  ", Style::default().fg(Color::Rgb(85, 87, 95))),
-            Span::styled("[Tab]", Style::default().fg(Color::Rgb(140, 142, 150))),
-            Span::styled(" complete  •  ", Style::default().fg(Color::Rgb(85, 87, 95))),
-            Span::styled("[↵]", Style::default().fg(Color::Rgb(140, 142, 150))),
-            Span::styled(" send", Style::default().fg(Color::Rgb(85, 87, 95))),
-        ]);
+        let hint_line = hint_line(
+            &[("/", "commands"), ("[Tab]", "complete"), ("[↵]", "send")],
+            prompt_chunks[1].width as usize,
+            Style::default().fg(Color::Rgb(140, 180, 255)),
+            Style::default().fg(Color::Rgb(85, 87, 95)),
+            "  •  ",
+        );
         f.render_widget(Paragraph::new(hint_line), prompt_chunks[1]);
 
         // 5. Command Autocomplete Suggestions Popup (Floats above prompt at bottom)
@@ -450,7 +460,7 @@ impl SidebarView {
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::Rgb(60, 62, 72)))
                 .style(Style::default().bg(Color::Rgb(16, 17, 22)))
-                .title(Span::styled("  commands [↑/↓ select, Tab complete]  ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+                .title(Span::styled(format!("  {}  ", ellipsize("commands [↑/↓ select, Tab complete]", (popup_rect.width as usize).saturating_sub(8))), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
 
             let start_idx = if selected_suggestion >= visible_count {
                 selected_suggestion + 1 - visible_count
@@ -461,25 +471,44 @@ impl SidebarView {
             let mut suggestion_lines = Vec::new();
             let mut row_y = popup_y + 1;
 
+            // Adaptive columns: name fits its longest entry; args shrink/hide before the
+            // description gets squeezed; description is ellipsized to the exact remainder.
+            let inner_w = popup_rect.width.saturating_sub(2) as usize;
+            let name_w = suggestions.iter().map(|c| c.name.chars().count()).max().unwrap_or(8) + 1;
+            let max_args = suggestions.iter().map(|c| c.args.chars().count()).max().unwrap_or(0);
+            let mut args_w = if max_args == 0 { 0 } else { max_args + 1 };
+            while args_w > 0 && inner_w < 3 + name_w + args_w + 24 {
+                args_w = if args_w > 8 { args_w - 4 } else { 0 };
+            }
+            let desc_w = inner_w.saturating_sub(3 + name_w + args_w);
+
             for (idx, cmd) in suggestions.iter().enumerate().skip(start_idx).take(visible_count) {
                 let is_selected = idx == selected_suggestion;
                 let item_rect = Rect::new(popup_rect.x + 1, row_y, popup_rect.width.saturating_sub(2), 1);
                 targets.suggestion_rows.push((cmd.name, cmd.args, item_rect));
                 row_y += 1;
 
+                let name_txt = format!("{:<w$}", ellipsize(cmd.name, name_w.saturating_sub(1)), w = name_w);
+                let args_txt = if args_w > 0 {
+                    format!("{:<w$}", ellipsize(cmd.args, args_w.saturating_sub(1)), w = args_w)
+                } else {
+                    String::new()
+                };
+                let desc_txt = ellipsize(cmd.description, desc_w);
+
                 if is_selected {
                     suggestion_lines.push(Line::from(vec![
                         Span::styled(" ▸ ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
-                        Span::styled(format!("{:<10} ", cmd.name), Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
-                        Span::styled(format!("{:<14} ", cmd.args), Style::default().fg(Color::Rgb(60, 62, 70)).bg(Color::White)),
-                        Span::styled(cmd.description.to_string(), Style::default().fg(Color::Black).bg(Color::White)),
+                        Span::styled(name_txt, Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
+                        Span::styled(args_txt, Style::default().fg(Color::Rgb(60, 62, 70)).bg(Color::White)),
+                        Span::styled(desc_txt, Style::default().fg(Color::Black).bg(Color::White)),
                     ]));
                 } else {
                     suggestion_lines.push(Line::from(vec![
                         Span::styled("   ", Style::default().fg(Color::Rgb(110, 112, 120))),
-                        Span::styled(format!("{:<10} ", cmd.name), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                        Span::styled(format!("{:<14} ", cmd.args), Style::default().fg(Color::Rgb(130, 132, 142))),
-                        Span::styled(cmd.description.to_string(), Style::default().fg(Color::Rgb(150, 152, 160))),
+                        Span::styled(name_txt, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                        Span::styled(args_txt, Style::default().fg(Color::Rgb(130, 132, 142))),
+                        Span::styled(desc_txt, Style::default().fg(Color::Rgb(150, 152, 160))),
                     ]));
                 }
             }

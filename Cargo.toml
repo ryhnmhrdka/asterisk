@@ -17,6 +17,7 @@ pulldown-cmark = "0.13.6"
 rataflow = "0.1.0"
 ratatui = "0.30.2"
 regex = "1.13.1"
+reqwest = { version = "0.13", features = ["json"] }
 rig = { package = "rig-core", version = "0.44.0", features = ["reqwest"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }

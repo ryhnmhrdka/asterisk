@@ -3,6 +3,7 @@ pub mod config;
 pub mod git_secrets;
 pub mod graph;
 pub mod jail;
+pub mod model_discovery;
 pub mod policy;
 pub mod rig_tools;
 pub mod sandbox;

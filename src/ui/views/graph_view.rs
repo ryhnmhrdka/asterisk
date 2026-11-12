@@ -1,16 +1,20 @@
-use rataflow::{Background, Controls, Flow, StepEdge, TextContent};
+use crate::orchestrator::graph::AgentNodeContent;
+use rataflow::{
+    Background, BackgroundStyle, BackgroundVariant, Controls, ControlsOrientation,
+    ControlsPosition, Flow, MiniMap, MiniMapPosition, MiniMapStyle, StepEdge,
+};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Paragraph},
+    widgets::{Block, BorderType, Paragraph, Wrap},
     Frame,
 };
 
 pub struct GraphView;
 
 impl GraphView {
-    pub fn render(f: &mut Frame, area: Rect, flow: &mut Flow<TextContent, StepEdge>, is_idle: bool) {
+    pub fn render(f: &mut Frame, area: Rect, flow: &mut Flow<AgentNodeContent, StepEdge>, is_idle: bool) {
         if is_idle {
             let empty_block = Block::default()
                 .style(Style::default().bg(Color::Rgb(14, 15, 19)));
@@ -51,11 +55,48 @@ impl GraphView {
 
         // 1. Rataflow Canvas
         let canvas_area = chunks[0];
-        f.render_widget(Background::new(flow), canvas_area);
-        f.render_widget(flow as &mut Flow<TextContent, StepEdge>, canvas_area);
-        f.render_widget(Controls::new(flow), canvas_area);
 
-        // 2. Sleek filled legend, NO ASCII wireframes
+        // Background dots
+        let bg_style = BackgroundStyle::default()
+            .with_pattern_color(Color::Rgb(32, 35, 46))
+            .with_bg_color(Color::Rgb(14, 15, 19));
+        let bg = Background::new(flow)
+            .variant(BackgroundVariant::Dots)
+            .gap(4, 2)
+            .style(bg_style);
+        f.render_widget(bg, canvas_area);
+
+        // Flow Graph
+        f.render_widget(flow as &mut Flow<AgentNodeContent, StepEdge>, canvas_area);
+
+        // Controls
+        let controls = Controls::new(flow)
+            .position(ControlsPosition::BottomLeft)
+            .orientation(ControlsOrientation::Horizontal);
+        f.render_widget(controls, canvas_area);
+
+        // MiniMap (Radar)
+        let minimap_style = MiniMapStyle::default()
+            .with_bg_color(Color::Rgb(16, 18, 24))
+            .with_node_color(Color::Rgb(70, 75, 95))
+            .with_selected_node_color(Color::Rgb(100, 220, 255))
+            .with_viewport_color(Color::Rgb(32, 40, 56));
+
+        let minimap_block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Rgb(55, 60, 75)))
+            .title(Line::from(vec![
+                Span::styled(" [radar] ", Style::default().fg(Color::Rgb(130, 135, 150)).add_modifier(Modifier::BOLD)),
+            ]));
+
+        let minimap = MiniMap::new(flow)
+            .position(MiniMapPosition::BottomRight)
+            .size(24, 7)
+            .style(minimap_style)
+            .block(minimap_block);
+        f.render_widget(minimap, canvas_area);
+
+        // 2. Sleek filled legend, monochrome technical ASCII glyphs
         let legend_area = chunks[1];
         let legend_block = Block::default()
             .style(Style::default().bg(Color::Rgb(14, 15, 19)));
@@ -63,26 +104,28 @@ impl GraphView {
         let legend_text = vec![
             Line::from(vec![
                 Span::raw("  "),
-                Span::styled("flow: ", Style::default().fg(Color::Rgb(100, 102, 110))),
-                Span::styled("orchestrator", Style::default().fg(Color::White)),
-                Span::styled("  ●  ", Style::default().fg(Color::Rgb(60, 62, 70))),
-                Span::styled("folders", Style::default().fg(Color::Rgb(150, 152, 160))),
-                Span::styled("  ●  ", Style::default().fg(Color::Rgb(60, 62, 70))),
-                Span::styled("files", Style::default().fg(Color::Rgb(150, 152, 160))),
-                Span::styled("  ●  ", Style::default().fg(Color::Rgb(60, 62, 70))),
-                Span::styled("subagents", Style::default().fg(Color::White)),
-                Span::styled("  ●  ", Style::default().fg(Color::Rgb(60, 62, 70))),
-                Span::styled("remediation", Style::default().fg(Color::Rgb(150, 152, 160))),
-                Span::styled("  ●  ", Style::default().fg(Color::Rgb(60, 62, 70))),
-                Span::styled("gate", Style::default().fg(Color::White)),
+                Span::styled("nodes: ", Style::default().fg(Color::Rgb(100, 102, 110))),
+                Span::styled("[#] orch", Style::default().fg(Color::Rgb(140, 200, 255))),
+                Span::styled("  •  ", Style::default().fg(Color::Rgb(60, 62, 70))),
+                Span::styled("[/] dir", Style::default().fg(Color::Rgb(160, 165, 180))),
+                Span::styled("  •  ", Style::default().fg(Color::Rgb(60, 62, 70))),
+                Span::styled("[.] file", Style::default().fg(Color::Rgb(160, 165, 180))),
+                Span::styled("  •  ", Style::default().fg(Color::Rgb(60, 62, 70))),
+                Span::styled("[>] subagent", Style::default().fg(Color::Rgb(180, 170, 255))),
+                Span::styled("  •  ", Style::default().fg(Color::Rgb(60, 62, 70))),
+                Span::styled("[!] remedy", Style::default().fg(Color::Rgb(255, 160, 160))),
+                Span::styled("  •  ", Style::default().fg(Color::Rgb(60, 62, 70))),
+                Span::styled("[✓] verify", Style::default().fg(Color::Rgb(140, 220, 180))),
+                Span::styled("  •  ", Style::default().fg(Color::Rgb(60, 62, 70))),
+                Span::styled("[#] gate", Style::default().fg(Color::Rgb(255, 200, 90))),
             ]),
             Line::from(vec![
                 Span::raw("  "),
-                Span::styled("edges: ", Style::default().fg(Color::Rgb(100, 102, 110))),
-                Span::styled("animating = running  •  static = completed  •  click node to pause/inspect", Style::default().fg(Color::Rgb(110, 112, 120))),
+                Span::styled("status: ", Style::default().fg(Color::Rgb(100, 102, 110))),
+                Span::styled("● running  •  ○ idle  •  ✓ passed  •  ! vuln alert  •  Space to pause/steer", Style::default().fg(Color::Rgb(120, 125, 135))),
             ]),
         ];
 
-        f.render_widget(Paragraph::new(legend_text).block(legend_block), legend_area);
+        f.render_widget(Paragraph::new(legend_text).wrap(Wrap { trim: false }).block(legend_block), legend_area);
     }
 }

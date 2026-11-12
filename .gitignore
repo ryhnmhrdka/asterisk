@@ -3,3 +3,7 @@
 /reference
 /.sentinel
 *.pkg.tar.zst
+.asterisk/
+tests/fixtures/**/.asterisk/
+tests/fixtures/**/patches/
+tests/fixtures/**/SECURITY.md

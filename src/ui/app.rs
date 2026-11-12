@@ -5,18 +5,21 @@ use crate::core::{
     AppConfig, PolicyGate, SecurityAgentHub, SecurityContextRules,
     WorktreeSandbox,
 };
-use crate::subagents::{AutoHardeningAgent, MalwareShieldAgent};
+use crate::subagents::{
+    ApkAndContainerGuardAgent, AutoHardeningAgent, MalwareShieldAgent, SecretHunterAgent,
+};
 use crate::types::{
     get_matching_commands, AgentStatus, AiProvider, ChatMessage, DynamicLogEntry, HardeningPatch,
     SproutedNodeInfo, VulnerabilityFinding, WorkspaceProfile,
 };
+use crate::orchestrator::graph::AgentNodeContent;
 use crate::ui::views::{
     GraphView, LogsView, MatrixView, ModalClickTargets, ModalView, PatchClickTargets, PatchView,
     SidebarClickTargets, SidebarView, SkillsView,
 };
 use chrono::Utc;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use rataflow::{Flow, FlowEvent, StepEdge, TextContent};
+use rataflow::{Flow, FlowEvent, StepEdge};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -41,9 +44,12 @@ pub enum AppMode {
 pub enum ActiveModal {
     None,
     SelectProvider,
+    ProviderDetail,
     SelectModel,
-    ApiKeyInput,
+    CustomProviderNameInput,
     BaseUrlInput,
+    ApiKeyInput,
+    ConfigDashboard,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,7 +81,8 @@ pub struct App {
     pub welcome_input: String,
     pub prompt_input: String,
 
-    pub flow: Flow<TextContent, StepEdge>,
+    pub flow: Flow<AgentNodeContent, StepEdge>,
+    pub last_flow_tick: std::time::Instant,
     pub nodes_info: HashMap<String, SproutedNodeInfo>,
     pub selected_node_id: Option<String>,
 
@@ -104,6 +111,8 @@ pub struct App {
     pub key_modal_input: String,
     pub model_modal_input: String,
     pub url_modal_input: String,
+    pub custom_provider_name_input: String,
+    pub is_setup_wizard: bool,
     pub key_modal_error: Option<String>,
     pub suggestion_index: usize,
     pub should_quit: bool,
@@ -117,6 +126,9 @@ pub struct App {
     pub diff_scope: String,
     pub checkpoint: Option<crate::core::sandbox::WorkspaceCheckpoint>,
     pub last_esc_press: Option<std::time::Instant>,
+    pub previous_modal: Option<ActiveModal>,
+    pub model_search_query: String,
+    pub model_filtered_items: Vec<(AiProvider, String, bool)>,
 }
 
 impl App {
@@ -140,6 +152,7 @@ impl App {
             welcome_input: String::new(),
             prompt_input: String::new(),
             flow,
+            last_flow_tick: std::time::Instant::now(),
             nodes_info,
             selected_node_id: None,
             profile,
@@ -166,6 +179,8 @@ impl App {
             key_modal_input: String::new(),
             model_modal_input: String::new(),
             url_modal_input: String::new(),
+            custom_provider_name_input: String::new(),
+            is_setup_wizard: false,
             key_modal_error: None,
             suggestion_index: 0,
             should_quit: false,
@@ -177,6 +192,9 @@ impl App {
             diff_scope: "FULL".to_string(),
             checkpoint,
             last_esc_press: None,
+            previous_modal: None,
+            model_search_query: String::new(),
+            model_filtered_items: Vec::new(),
         }
     }
 
@@ -189,14 +207,50 @@ impl App {
         self.selected_provider_index = all.iter().position(|p| *p == self.active_provider).unwrap_or(0);
     }
 
+    pub fn open_provider_detail(&mut self, provider: AiProvider) {
+        self.show_key_modal = true;
+        self.active_modal = ActiveModal::ProviderDetail;
+        self.active_provider = provider;
+        self.modal_field = 0;
+        self.key_modal_error = None;
+    }
+
+    pub fn rebuild_all_models_list(&mut self) {
+        let mut list = Vec::new();
+        let query = self.model_search_query.trim().to_lowercase();
+
+        for &prov in &AiProvider::ALL {
+            let is_configured = self.config.is_provider_configured(prov);
+            let models = self.config.get_models_for_provider(prov);
+            for m in models {
+                if query.is_empty()
+                    || m.to_lowercase().contains(&query)
+                    || prov.name().to_lowercase().contains(&query)
+                {
+                    list.push((prov, m, is_configured));
+                }
+            }
+        }
+        self.model_filtered_items = list;
+        if self.selected_model_index >= self.model_filtered_items.len() {
+            self.selected_model_index = self.model_filtered_items.len().saturating_sub(1);
+        }
+    }
+
     pub fn open_model_modal(&mut self) {
         self.show_key_modal = true;
         self.active_modal = ActiveModal::SelectModel;
         self.modal_field = 1;
         self.key_modal_error = None;
-        self.model_modal_input = self.config.get_model();
-        let presets = self.active_provider.preset_models();
-        self.selected_model_index = presets.iter().position(|m| *m == self.model_modal_input).unwrap_or(0);
+        self.model_search_query.clear();
+        self.rebuild_all_models_list();
+
+        let cur_model = self.config.get_model();
+        self.selected_model_index = self
+            .model_filtered_items
+            .iter()
+            .position(|(p, m, _)| *p == self.active_provider && *m == cur_model)
+            .unwrap_or(0);
     }
 
     pub fn open_key_modal(&mut self) {
@@ -204,7 +258,51 @@ impl App {
         self.active_modal = ActiveModal::ApiKeyInput;
         self.modal_field = 2;
         self.key_modal_error = None;
-        self.key_modal_input = self.config.get_api_key().unwrap_or_default();
+        self.key_modal_input = self.config.get_api_key_for_provider(self.active_provider).unwrap_or_default();
+    }
+
+    pub fn open_custom_provider_name_modal(&mut self) {
+        self.show_key_modal = true;
+        self.active_modal = ActiveModal::CustomProviderNameInput;
+        self.modal_field = 0;
+        self.key_modal_error = None;
+        self.custom_provider_name_input = self
+            .config
+            .custom_provider_name
+            .clone()
+            .unwrap_or_else(|| "Custom Provider".to_string());
+    }
+
+    pub fn save_custom_provider_name_modal(&mut self) -> bool {
+        let name = self.custom_provider_name_input.trim();
+        let final_name = if name.is_empty() {
+            "Custom Provider".to_string()
+        } else {
+            name.to_string()
+        };
+        self.config.custom_provider_name = Some(final_name);
+        let _ = self.config.save();
+        self.key_modal_error = None;
+        self.previous_modal = Some(ActiveModal::CustomProviderNameInput);
+        self.open_url_modal();
+        true
+    }
+
+    pub fn start_provider_setup_flow(&mut self, provider: AiProvider) {
+        self.is_setup_wizard = true;
+        self.active_provider = provider;
+        self.key_modal_error = None;
+
+        if provider == AiProvider::Custom {
+            // Step 1: Provider Name
+            self.previous_modal = Some(ActiveModal::SelectProvider);
+            self.open_custom_provider_name_modal();
+        } else {
+            // Predefined provider: Nama sudah ada (OpenAI, Claude, dll).
+            // Langsung masuk ke Step 1 of 2: Endpoint Base URL!
+            self.previous_modal = Some(ActiveModal::SelectProvider);
+            self.open_url_modal();
+        }
     }
 
     pub fn open_url_modal(&mut self) {
@@ -212,7 +310,7 @@ impl App {
         self.active_modal = ActiveModal::BaseUrlInput;
         self.modal_field = 1;
         self.key_modal_error = None;
-        self.url_modal_input = self.config.get_base_url().unwrap_or_default();
+        self.url_modal_input = self.config.get_base_url_for_provider(self.active_provider).unwrap_or_default();
     }
 
     pub fn open_provider_model_modal(&mut self, initial_field: usize) {
@@ -231,12 +329,56 @@ impl App {
         }
     }
 
+    pub fn open_config_dashboard(&mut self) {
+        self.show_key_modal = true;
+        self.active_modal = ActiveModal::ConfigDashboard;
+        self.modal_field = 0;
+        self.key_modal_error = None;
+    }
+
     pub fn open_config_modal(&mut self, initial_field: usize) {
         match initial_field {
-            0 => self.open_provider_modal(),
-            1 => self.open_model_modal(),
-            2 => self.open_key_modal(),
+            0 => self.open_config_dashboard(),
+            1 => self.open_provider_modal(),
+            2 => self.open_model_modal(),
+            3 => self.open_key_modal(),
             _ => self.open_url_modal(),
+        }
+    }
+
+    pub fn sync_live_models_for_provider(&mut self, provider: AiProvider) {
+        let key = self.config.get_api_key_for_provider(provider);
+        let base_url = self.config.get_base_url_for_provider(provider);
+        if provider.requires_api_key() && key.is_none() {
+            self.action_msg = Some(format!("cannot sync models: no API key configured for {}.", provider.name()));
+            return;
+        }
+
+        self.action_msg = Some(format!("querying {} API for live models...", provider.name()));
+        let sender = self.engine_tx.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                match crate::core::model_discovery::fetch_live_models(
+                    provider,
+                    key.as_deref(),
+                    base_url.as_deref(),
+                )
+                .await
+                {
+                    Ok(models) => {
+                        let _ = sender.send(EngineMessage::ModelsDiscovered { provider, models });
+                    }
+                    Err(err) => {
+                        let _ = sender.send(EngineMessage::Chat(ChatMessage::Agent {
+                            sender: "orchestrator".to_string(),
+                            text: format!(
+                                "⚠️ **Live Model Discovery Failed ({})**: {err}\nUsing preset model defaults.",
+                                provider.name()
+                            ),
+                        }));
+                    }
+                }
+            });
         }
     }
 
@@ -252,7 +394,8 @@ impl App {
                 sender: "orchestrator".to_string(),
                 text: format!(
                     "⚠️ **Defense scan blocked**: No API key configured for **{}**.\n\
-                     Autonomous audit and models cannot be accessed until credentials are configured. Please enter your API key to proceed.",
+                     Autonomous audit and models cannot be accessed until credentials are configured. Please enter your API key to proceed.\n\
+                     💡 *Tip: To run a 100% offline/local audit without an API key, switch to Ollama via `/provider ollama`.*",
                     self.active_provider.name()
                 ),
             });
@@ -281,13 +424,15 @@ impl App {
         let diff_scope = self.diff_scope.clone();
         let provider_name = self.active_provider.name().to_string();
         let config = self.config.clone();
-        tokio::spawn(async move {
-            let engine = ExecutionEngine::new(target, sender, cmd_rx)
-                .with_diff_scope(diff_scope)
-                .with_active_provider(provider_name)
-                .with_config(config);
-            engine.run_autonomous_audit().await;
-        });
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let engine = ExecutionEngine::new(target, sender, cmd_rx)
+                    .with_diff_scope(diff_scope)
+                    .with_active_provider(provider_name)
+                    .with_config(config);
+                engine.run_autonomous_audit().await;
+            });
+        }
     }
 
     pub fn confirm_subagent_deployment(&mut self) {
@@ -314,7 +459,8 @@ impl App {
                     let _ = self.cmd_tx.send(EngineCommand::ResumeNode(node_id));
                 }
             }
-            if let Ok(updated_flow) = AgentGraphBuilder::build_sprouted_graph(&self.nodes_info) {
+            if let Ok(mut updated_flow) = AgentGraphBuilder::build_sprouted_graph(&self.nodes_info) {
+                updated_flow.viewport = self.flow.viewport;
                 self.flow = updated_flow;
             }
         }
@@ -326,7 +472,8 @@ impl App {
             if let Some(gate) = self.nodes_info.get_mut("defense_gate") {
                 gate.status = AgentStatus::Success;
             }
-            if let Ok(updated_flow) = AgentGraphBuilder::build_sprouted_graph(&self.nodes_info) {
+            if let Ok(mut updated_flow) = AgentGraphBuilder::build_sprouted_graph(&self.nodes_info) {
+                updated_flow.viewport = self.flow.viewport;
                 self.flow = updated_flow;
             }
             self.action_msg = Some("all vulnerabilities mitigated. defense gate open.".to_string());
@@ -335,22 +482,61 @@ impl App {
 
     pub fn export_security_report(&mut self) {
         let report_path = self.target_dir.join("security-audit-report.json");
+        let md_path = self.target_dir.join("security-audit-report.md");
+        let generated_at = Utc::now().to_rfc3339();
+        let unpatched_count = self.findings.iter().filter(|f| !f.patched).count();
         let report = serde_json::json!({
-            "generated_at": Utc::now().to_rfc3339(),
+            "generated_at": generated_at,
             "target": self.target_dir.display().to_string(),
             "total_files": self.profile.total_files,
             "languages": self.profile.languages,
             "findings_count": self.findings.len(),
-            "unpatched_count": self.findings.iter().filter(|f| !f.patched).count(),
+            "unpatched_count": unpatched_count,
             "findings": self.findings,
             "patches": self.patches,
         });
 
-        match std::fs::write(&report_path, serde_json::to_string_pretty(&report).unwrap_or_default()) {
+        let mut md = format!(
+            "# Asterisk Security Defense Report\n\n\
+             - **Generated At:** `{generated_at}`\n\
+             - **Target Workspace:** `{}`\n\
+             - **Total Files:** `{}` (`{}`)\n\
+             - **Total Findings:** `{}` (`{unpatched_count}` unresolved)\n\
+             - **Synthesized Patches:** `{}`\n\n\
+             ## Vulnerability Matrix\n\n\
+             | ID | Severity | CWE | Reachability | Verdict | Location | Title | Status |\n\
+             | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n",
+            self.target_dir.display(),
+            self.profile.total_files,
+            self.profile.languages.join(", "),
+            self.findings.len(),
+            self.patches.len(),
+        );
+        for f in &self.findings {
+            let status = if f.patched { "PATCHED" } else { "OPEN" };
+            md.push_str(&format!(
+                "| `{}` | `{}` | `{}` | `{}` | `{}` | `{}:{}` | {} | `{}` |\n",
+                f.id,
+                f.severity.as_str(),
+                f.cwe,
+                f.reachability,
+                f.triage_verdict,
+                f.file_path.display(),
+                f.line_number,
+                f.title,
+                status
+            ));
+        }
+
+        let json_res = std::fs::write(&report_path, serde_json::to_string_pretty(&report).unwrap_or_default());
+        let _ = std::fs::write(&md_path, md);
+
+        match json_res {
             Ok(()) => {
-                let name = report_path.file_name().unwrap_or_default().to_string_lossy();
-                self.action_msg = Some(format!("report exported -> {name}"));
-                self.chat_messages.push(ChatMessage::System(format!("security report written to {name}.")));
+                self.action_msg = Some("report exported -> security-audit-report.{json,md}".to_string());
+                self.chat_messages.push(ChatMessage::System(
+                    "security reports written to security-audit-report.json and security-audit-report.md.".to_string(),
+                ));
             }
             Err(e) => {
                 self.action_msg = Some(format!("export error: {e}"));
@@ -359,13 +545,19 @@ impl App {
     }
 
     pub fn update(&mut self) {
+        let now = std::time::Instant::now();
+        let elapsed = now.duration_since(self.last_flow_tick);
+        self.last_flow_tick = now;
+        self.flow.tick_animation(elapsed);
+
         while let Ok(msg) = self.engine_rx.try_recv() {
             match msg {
                 EngineMessage::NodeStatusChanged { id, status } => {
                     if let Some(node) = self.nodes_info.get_mut(&id) {
                         node.status = status;
                     }
-                    if let Ok(updated_flow) = AgentGraphBuilder::build_sprouted_graph(&self.nodes_info) {
+                    if let Ok(mut updated_flow) = AgentGraphBuilder::build_sprouted_graph(&self.nodes_info) {
+                        updated_flow.viewport = self.flow.viewport;
                         self.flow = updated_flow;
                     }
                 }
@@ -401,6 +593,16 @@ impl App {
                         self.patches.len()
                     ));
                 }
+                EngineMessage::ModelsDiscovered { provider, models } => {
+                    let count = models.len();
+                    self.config.discovered_models.insert(provider.name().to_string(), models);
+                    let _ = self.config.save();
+                    self.rebuild_all_models_list();
+                    self.action_msg = Some(format!(
+                        "synced {count} live models for {} from API!",
+                        provider.name()
+                    ));
+                }
             }
         }
     }
@@ -424,29 +626,113 @@ impl App {
 
     pub fn save_key_modal(&mut self) -> bool {
         let k = self.key_modal_input.trim();
-        if k.is_empty() && self.config.requires_api_key() {
-            self.key_modal_error = Some("API key cannot be empty.".to_string());
+        if k.is_empty() && self.active_provider.requires_api_key() && self.active_provider != AiProvider::Custom {
+            self.key_modal_error = Some("API key cannot be empty for this cloud provider.".to_string());
             return false;
         }
-        self.config.api_key = if k.is_empty() { None } else { Some(k.to_string()) };
+
+        if k.is_empty() {
+            self.config.provider_keys.remove(self.active_provider.name());
+            if self.config.provider == self.active_provider {
+                self.config.api_key = None;
+            }
+        } else {
+            self.config.provider_keys.insert(self.active_provider.name().to_string(), k.to_string());
+            if self.config.provider == self.active_provider {
+                self.config.api_key = Some(k.to_string());
+            }
+        }
+
         self.config.provider = self.active_provider;
         let _ = self.config.save();
-        self.show_key_modal = false;
-        self.active_modal = ActiveModal::None;
         self.key_modal_error = None;
-        self.action_msg = Some(format!("API key configured for {}.", self.active_provider.name()));
+        self.action_msg = Some(format!(
+            "configured credentials for {}.",
+            self.config.get_provider_display_name(self.active_provider)
+        ));
+
+        if !k.is_empty() || self.active_provider == AiProvider::Custom {
+            self.sync_live_models_for_provider(self.active_provider);
+        }
+
+        if self.is_setup_wizard {
+            self.is_setup_wizard = false;
+            self.previous_modal = Some(ActiveModal::SelectProvider);
+            self.open_model_modal();
+        } else if let Some(prev) = self.previous_modal.take() {
+            match prev {
+                ActiveModal::BaseUrlInput | ActiveModal::CustomProviderNameInput => {
+                    self.show_key_modal = false;
+                    self.active_modal = ActiveModal::None;
+                }
+                ActiveModal::SelectProvider => self.open_provider_modal(),
+                ActiveModal::ProviderDetail => self.open_provider_detail(self.active_provider),
+                ActiveModal::SelectModel => self.open_model_modal(),
+                ActiveModal::ConfigDashboard => self.open_config_dashboard(),
+                _ => {
+                    self.show_key_modal = false;
+                    self.active_modal = ActiveModal::None;
+                }
+            }
+        } else {
+            self.show_key_modal = false;
+            self.active_modal = ActiveModal::None;
+        }
         true
     }
 
     pub fn save_modal_config(&mut self) -> bool {
         match self.active_modal {
+            ActiveModal::CustomProviderNameInput => self.save_custom_provider_name_modal(),
             ActiveModal::ApiKeyInput => self.save_key_modal(),
             ActiveModal::BaseUrlInput => {
                 let u = self.url_modal_input.trim();
-                self.config.base_url = if u.is_empty() { None } else { Some(u.to_string()) };
+                if u.is_empty() {
+                    self.config.provider_base_urls.remove(self.active_provider.name());
+                    if self.config.provider == self.active_provider {
+                        self.config.base_url = None;
+                    }
+                } else {
+                    self.config.provider_base_urls.insert(self.active_provider.name().to_string(), u.to_string());
+                    if self.config.provider == self.active_provider {
+                        self.config.base_url = Some(u.to_string());
+                    }
+                }
                 let _ = self.config.save();
-                if self.config.requires_api_key() && !self.config.is_api_key_configured() {
+
+                if self.active_provider == AiProvider::OllamaLocal {
+                    self.sync_live_models_for_provider(AiProvider::OllamaLocal);
+                    if self.is_setup_wizard {
+                        self.is_setup_wizard = false;
+                        self.previous_modal = Some(ActiveModal::SelectProvider);
+                        self.open_model_modal();
+                    } else if let Some(prev) = self.previous_modal.take() {
+                        match prev {
+                            ActiveModal::SelectProvider => self.open_provider_modal(),
+                            ActiveModal::ProviderDetail => self.open_provider_detail(self.active_provider),
+                            ActiveModal::ConfigDashboard => self.open_config_dashboard(),
+                            _ => {
+                                self.show_key_modal = false;
+                                self.active_modal = ActiveModal::None;
+                            }
+                        }
+                    } else {
+                        self.show_key_modal = false;
+                        self.active_modal = ActiveModal::None;
+                    }
+                } else if self.is_setup_wizard || self.active_provider == AiProvider::Custom || (self.active_provider.requires_api_key() && !self.config.is_provider_configured(self.active_provider)) {
+                    self.previous_modal = Some(ActiveModal::BaseUrlInput);
                     self.open_key_modal();
+                } else if let Some(prev) = self.previous_modal.take() {
+                    match prev {
+                        ActiveModal::SelectProvider => self.open_provider_modal(),
+                        ActiveModal::ProviderDetail => self.open_provider_detail(self.active_provider),
+                        ActiveModal::ConfigDashboard => self.open_config_dashboard(),
+                        _ => {
+                            self.show_key_modal = false;
+                            self.active_modal = ActiveModal::None;
+                        }
+                    }
                 } else {
                     self.show_key_modal = false;
                     self.active_modal = ActiveModal::None;
@@ -459,6 +745,16 @@ impl App {
             ActiveModal::SelectProvider => {
                 self.handle_provider_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()))
             }
+            ActiveModal::ProviderDetail => {
+                self.show_key_modal = false;
+                self.active_modal = ActiveModal::None;
+                true
+            }
+            ActiveModal::ConfigDashboard => {
+                self.show_key_modal = false;
+                self.active_modal = ActiveModal::None;
+                true
+            }
             ActiveModal::None => {
                 self.show_key_modal = false;
                 true
@@ -469,13 +765,100 @@ impl App {
     fn handle_modal_key(&mut self, key: KeyEvent) -> bool {
         match self.active_modal {
             ActiveModal::SelectProvider => self.handle_provider_key(key),
+            ActiveModal::ProviderDetail => self.handle_provider_detail_key(key),
             ActiveModal::SelectModel => self.handle_model_key(key),
+            ActiveModal::CustomProviderNameInput => self.handle_provider_name_input_key(key),
             ActiveModal::ApiKeyInput => self.handle_key_input_key(key),
             ActiveModal::BaseUrlInput => self.handle_url_input_key(key),
+            ActiveModal::ConfigDashboard => self.handle_config_dashboard_key(key),
             ActiveModal::None => {
                 self.show_key_modal = false;
                 false
             }
+        }
+    }
+
+    fn handle_provider_name_input_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                self.open_provider_modal();
+                false
+            }
+            KeyCode::Backspace => {
+                self.custom_provider_name_input.pop();
+                false
+            }
+            KeyCode::Enter => {
+                self.save_custom_provider_name_modal();
+                false
+            }
+            KeyCode::Char(c) => {
+                self.custom_provider_name_input.push(c);
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn handle_provider_detail_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                self.open_provider_modal();
+                false
+            }
+            KeyCode::Char('1') | KeyCode::Char('k') => {
+                self.previous_modal = Some(ActiveModal::ProviderDetail);
+                self.open_key_modal();
+                false
+            }
+            KeyCode::Char('2') | KeyCode::Char('u') => {
+                self.previous_modal = Some(ActiveModal::ProviderDetail);
+                self.open_url_modal();
+                false
+            }
+            KeyCode::Char('3') | KeyCode::Char('m') | KeyCode::Enter => {
+                self.config.provider = self.active_provider;
+                let _ = self.config.save();
+                self.previous_modal = Some(ActiveModal::ProviderDetail);
+                self.open_model_modal();
+                false
+            }
+            KeyCode::Char('4') | KeyCode::Char('s') => {
+                self.sync_live_models_for_provider(self.active_provider);
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn handle_config_dashboard_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc => {
+                self.show_key_modal = false;
+                self.active_modal = ActiveModal::None;
+                false
+            }
+            KeyCode::Char('1') | KeyCode::Char('p') => {
+                self.previous_modal = Some(ActiveModal::ConfigDashboard);
+                self.open_provider_modal();
+                false
+            }
+            KeyCode::Char('2') | KeyCode::Char('m') => {
+                self.previous_modal = Some(ActiveModal::ConfigDashboard);
+                self.open_model_modal();
+                false
+            }
+            KeyCode::Char('3') | KeyCode::Char('k') => {
+                self.previous_modal = Some(ActiveModal::ConfigDashboard);
+                self.open_key_modal();
+                false
+            }
+            KeyCode::Char('4') | KeyCode::Char('u') => {
+                self.previous_modal = Some(ActiveModal::ConfigDashboard);
+                self.open_url_modal();
+                false
+            }
+            _ => false,
         }
     }
 
@@ -484,6 +867,30 @@ impl App {
             KeyCode::Esc => {
                 self.show_key_modal = false;
                 self.active_modal = ActiveModal::None;
+                false
+            }
+            KeyCode::Char('c') | KeyCode::Char('a') => {
+                if let Some(p) = AiProvider::ALL.get(self.selected_provider_index) {
+                    self.start_provider_setup_flow(*p);
+                }
+                false
+            }
+            KeyCode::Char('k') => {
+                if let Some(p) = AiProvider::ALL.get(self.selected_provider_index) {
+                    self.active_provider = *p;
+                    self.config.provider = *p;
+                }
+                self.previous_modal = Some(ActiveModal::SelectProvider);
+                self.open_key_modal();
+                false
+            }
+            KeyCode::Char('u') => {
+                if let Some(p) = AiProvider::ALL.get(self.selected_provider_index) {
+                    self.active_provider = *p;
+                    self.config.provider = *p;
+                }
+                self.previous_modal = Some(ActiveModal::SelectProvider);
+                self.open_url_modal();
                 false
             }
             KeyCode::Up => {
@@ -520,13 +927,9 @@ impl App {
             KeyCode::Enter => {
                 if let Some(p) = AiProvider::ALL.get(self.selected_provider_index) {
                     self.active_provider = *p;
-                    self.config.provider = *p;
                 }
-                if self.active_provider == AiProvider::Custom && self.config.get_base_url().is_none() {
-                    self.open_url_modal();
-                } else {
-                    self.open_model_modal();
-                }
+                self.previous_modal = Some(ActiveModal::SelectProvider);
+                self.open_provider_detail(self.active_provider);
                 false
             }
             _ => false,
@@ -534,77 +937,103 @@ impl App {
     }
 
     fn handle_model_key(&mut self, key: KeyEvent) -> bool {
-        if self.config.requires_api_key() && !self.config.is_api_key_configured() {
-            match key.code {
-                KeyCode::Esc => {
-                    self.show_key_modal = false;
-                    self.active_modal = ActiveModal::None;
-                    false
-                }
-                KeyCode::Enter => {
-                    self.open_key_modal();
-                    false
-                }
-                _ => false,
-            }
-        } else {
-            match key.code {
-                KeyCode::Esc => {
-                    self.show_key_modal = false;
-                    self.active_modal = ActiveModal::None;
-                    false
-                }
-                KeyCode::Up => {
-                    let presets = self.active_provider.preset_models();
-                    if !presets.is_empty() {
-                        if self.selected_model_index == 0 {
-                            self.selected_model_index = presets.len() - 1;
-                        } else {
-                            self.selected_model_index -= 1;
+        match key.code {
+            KeyCode::Esc => {
+                if let Some(prev) = self.previous_modal.take() {
+                    match prev {
+                        ActiveModal::SelectProvider => self.open_provider_modal(),
+                        ActiveModal::ProviderDetail => self.open_provider_detail(self.active_provider),
+                        ActiveModal::ConfigDashboard => self.open_config_dashboard(),
+                        _ => {
+                            self.show_key_modal = false;
+                            self.active_modal = ActiveModal::None;
                         }
-                        self.model_modal_input = presets[self.selected_model_index].to_string();
                     }
-                    false
+                } else {
+                    self.show_key_modal = false;
+                    self.active_modal = ActiveModal::None;
                 }
-                KeyCode::Down | KeyCode::Tab => {
-                    let presets = self.active_provider.preset_models();
-                    if !presets.is_empty() {
-                        self.selected_model_index = (self.selected_model_index + 1) % presets.len();
-                        self.model_modal_input = presets[self.selected_model_index].to_string();
-                    }
-                    false
-                }
-                KeyCode::Enter => {
-                    let presets = self.active_provider.preset_models();
-                    let chosen = if let Some(m) = presets.get(self.selected_model_index) {
-                        m.to_string()
+                false
+            }
+            KeyCode::Up => {
+                if !self.model_filtered_items.is_empty() {
+                    if self.selected_model_index == 0 {
+                        self.selected_model_index = self.model_filtered_items.len() - 1;
                     } else {
-                        self.active_provider.default_model().to_string()
-                    };
-                    self.config.provider = self.active_provider;
-                    self.config.model = Some(chosen.clone());
-                    self.model_modal_input = chosen.clone();
+                        self.selected_model_index -= 1;
+                    }
+                }
+                false
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                if !self.model_filtered_items.is_empty() {
+                    self.selected_model_index = (self.selected_model_index + 1) % self.model_filtered_items.len();
+                }
+                false
+            }
+            KeyCode::Backspace => {
+                if !self.model_search_query.is_empty() {
+                    self.model_search_query.pop();
+                    self.rebuild_all_models_list();
+                }
+                false
+            }
+            KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some((prov, _, _)) = self.model_filtered_items.get(self.selected_model_index) {
+                    self.active_provider = *prov;
+                    self.config.provider = *prov;
+                }
+                self.previous_modal = Some(ActiveModal::SelectModel);
+                self.open_key_modal();
+                false
+            }
+            KeyCode::Enter => {
+                if let Some((prov, model_name, is_conf)) = self.model_filtered_items.get(self.selected_model_index) {
+                    self.active_provider = *prov;
+                    self.config.provider = *prov;
+                    self.config.model = Some(model_name.clone());
 
-                    if self.config.requires_api_key() && !self.config.is_api_key_configured() {
+                    if *prov != AiProvider::OllamaLocal && !is_conf {
+                        self.previous_modal = Some(ActiveModal::SelectModel);
                         self.open_key_modal();
                     } else {
                         let _ = self.config.save();
                         self.show_key_modal = false;
                         self.active_modal = ActiveModal::None;
-                        self.action_msg = Some(format!("provider & model set to {} / {chosen}.", self.active_provider.name()));
+                        self.previous_modal = None;
+                        self.action_msg = Some(format!("model selected: {model_name} ({}).", prov.name()));
                     }
-                    false
                 }
-                _ => false,
+                false
             }
+            KeyCode::Char(c) => {
+                self.model_search_query.push(c);
+                self.rebuild_all_models_list();
+                false
+            }
+            _ => false,
         }
     }
 
     fn handle_key_input_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc => {
-                self.show_key_modal = false;
-                self.active_modal = ActiveModal::None;
+                if let Some(prev) = self.previous_modal.take() {
+                    match prev {
+                        ActiveModal::BaseUrlInput => self.open_url_modal(),
+                        ActiveModal::SelectProvider => self.open_provider_modal(),
+                        ActiveModal::ProviderDetail => self.open_provider_detail(self.active_provider),
+                        ActiveModal::SelectModel => self.open_model_modal(),
+                        ActiveModal::ConfigDashboard => self.open_config_dashboard(),
+                        _ => {
+                            self.show_key_modal = false;
+                            self.active_modal = ActiveModal::None;
+                        }
+                    }
+                } else {
+                    self.show_key_modal = false;
+                    self.active_modal = ActiveModal::None;
+                }
                 self.key_modal_error = None;
                 false
             }
@@ -627,8 +1056,22 @@ impl App {
     fn handle_url_input_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc => {
-                self.show_key_modal = false;
-                self.active_modal = ActiveModal::None;
+                if let Some(prev) = self.previous_modal.take() {
+                    match prev {
+                        ActiveModal::CustomProviderNameInput => self.open_custom_provider_name_modal(),
+                        ActiveModal::SelectProvider => self.open_provider_modal(),
+                        ActiveModal::ProviderDetail => self.open_provider_detail(self.active_provider),
+                        ActiveModal::ConfigDashboard => self.open_config_dashboard(),
+                        _ => {
+                            self.show_key_modal = false;
+                            self.active_modal = ActiveModal::None;
+                        }
+                    }
+                } else if self.active_provider == AiProvider::Custom {
+                    self.open_custom_provider_name_modal();
+                } else {
+                    self.open_provider_modal();
+                }
                 self.key_modal_error = None;
                 false
             }
@@ -637,16 +1080,7 @@ impl App {
                 false
             }
             KeyCode::Enter => {
-                let u = self.url_modal_input.trim();
-                self.config.base_url = if u.is_empty() { None } else { Some(u.to_string()) };
-                let _ = self.config.save();
-                if self.config.requires_api_key() && !self.config.is_api_key_configured() {
-                    self.open_key_modal();
-                } else {
-                    self.show_key_modal = false;
-                    self.active_modal = ActiveModal::None;
-                    self.action_msg = Some(format!("base URL updated for {}.", self.active_provider.name()));
-                }
+                self.save_modal_config();
                 false
             }
             KeyCode::Char(c) => {
@@ -701,7 +1135,7 @@ impl App {
                 }
                 KeyCode::Enter => {
                     if let Some(cmd) = suggestions.get(self.suggestion_index) {
-                        if self.prompt_input == cmd.name || cmd.args.is_empty() {
+                        if self.prompt_input == cmd.name || cmd.args.is_empty() || cmd.args.starts_with('[') {
                             self.prompt_input = cmd.name.to_string();
                             return self.submit_prompt_input();
                         } else {
@@ -759,7 +1193,7 @@ impl App {
                     self.prompt_input.clear();
                     self.suggestion_index = 0;
                 } else {
-                    return true;
+                    self.action_msg = Some("press Esc again to rewind checkpoint, or /exit (Ctrl+C) to quit".to_string());
                 }
             }
             KeyCode::Tab => {
@@ -770,7 +1204,8 @@ impl App {
             KeyCode::F(3) => self.current_tab = 2,
             KeyCode::F(4) => self.current_tab = 3,
             KeyCode::F(5) => self.current_tab = 4,
-            KeyCode::Char(c @ '1'..='5') if self.prompt_input.is_empty() => {
+            // Alt+1..5 switches tabs (plain digits stay available for typing)
+            KeyCode::Char(c @ '1'..='5') if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.current_tab = (c as usize) - ('1' as usize);
             }
 
@@ -781,28 +1216,31 @@ impl App {
                 self.prompt_input.pop();
                 self.suggestion_index = 0;
             }
-            KeyCode::Char('p') if self.prompt_input.is_empty() => {
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if self.is_running {
                     self.toggle_pause_selected_node();
                 }
             }
-            KeyCode::Char('a') if self.prompt_input.is_empty() => {
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if !self.patches.is_empty() {
                     self.apply_current_patch();
                 }
             }
-            KeyCode::Char('r') if self.prompt_input.is_empty() => {
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if !self.patches.is_empty() {
                     self.rollback_current_patch();
                 }
             }
-            KeyCode::Char('e') if self.prompt_input.is_empty() => {
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.export_security_report();
             }
             KeyCode::Char(' ') if self.prompt_input.is_empty() => {
                 if !self.config.is_api_key_configured() {
-                    self.open_config_modal(2);
-                    self.action_msg = Some("authentication required: please set API key to run audit.".to_string());
+                    // Non-intrusive: no popup on a casual Space press, just a hint.
+                    self.action_msg = Some(format!(
+                        "no API key for {} — type /provider (or /key) to set one, or use Ollama for offline audit.",
+                        self.config.provider.name()
+                    ));
                 } else {
                     self.trigger_audit();
                 }
@@ -821,7 +1259,9 @@ impl App {
                     self.selected_patch_row += 1;
                 }
             }
-            KeyCode::Char(c) => {
+            KeyCode::Char(c)
+                if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
                 self.prompt_input.push(c);
                 self.suggestion_index = 0;
             }
@@ -862,33 +1302,36 @@ impl App {
             } else if input == "/help" || input == "help" {
                 self.chat_messages.push(ChatMessage::Agent {
                     sender: "orchestrator".to_string(),
-                    text: "### Constellation Security Defense Command Reference\n\n\
+                    text: "### Asterisk Security Defense Command Reference\n\n\
                            | Command | Description |\n\
                            | :--- | :--- |\n\
                            | `/scan` | Execute autonomous code defense scan & AST flow |\n\
+                           | `/patch` | Apply selected code hardening patch to disk |\n\
+                           | `/secrets` | Scan & filter hardcoded secrets & high-entropy credentials |\n\
                            | `/init-sec` | Initialize CodeContextGraph & draft SECURITY.md |\n\
                            | `/reachability` | Display function reachability & phantom dependency analysis |\n\
                            | `/shield` | Run Pre-Install Malware Shield audit |\n\
+                           | `/apk [path]` | Audit AndroidManifest.xml, mobile APK & container configs |\n\
                            | `/hotfix [pkg]` | Generate local library patch ./patches/<pkg>.patch without upgrade |\n\
-                           | `/skills [action]` | Manage, import, or synthesize 3-tier .skill.md |\n\
+                           | `/skills [action]` | Manage, import (`/skills import <path>`), or synthesize (`/skills synth`) 3-tier .skill.md |\n\
                            | `/model [name]` | Open supported model selector modal or set model |\n\
                            | `/provider [name]` | Open supported provider list or switch provider |\n\
                            | `/custom [url]` | Add & configure custom AI provider endpoint & credentials |\n\
                            | `/key [api_key]` | Open credentials setup or set API key |\n\
                            | `/url [endpoint]` | Open endpoint setup or set base URL |\n\
-                           | `/config` | Display provider credentials & connection setup |\n\
+                           | `/config` | Display provider credentials & connection setup modal |\n\
                            | `/apply` | Apply selected hardening patch to source code |\n\
                            | `/rollback` | Rollback previously applied hardening patch |\n\
-                           | `/export` | Export defense audit report to HTML & Markdown |\n\
+                           | `/export` | Export defense audit report to JSON & Markdown |\n\
                            | `/pause` | Pause / resume selected agent node in workflow |\n\
                            | `/clear` | Clear chat message history |\n\
                            | `/help` | Display this command reference |\n\
                            | `/exit` | Exit asterisk defense harness |\n\n\
                            **Keyboard Shortcuts:**\n\
-                           - `[1]`..`[5]`: Switch tabs (Flow, Findings, Patches, Execution, Skills)\n\
-                           - `[Space]`: Run security audit\n\
-                           - `[a]`: Apply patch │ `[r]`: Rollback patch │ `[p]`: Pause node │ `[e]`: Export report\n\
-                           - `[↑/↓]`: Navigate list / suggestions │ `[Tab]`: Autocomplete command │ `[Esc]`: Clear / Cancel".to_string(),
+                           - `[Alt+1]`..`[Alt+5]` / `[F1]`..`[F5]` / `[Tab]`: Switch tabs (Flow, Findings, Patches, Execution, Skills)\n\
+                           - `[Space]` (empty prompt): Run security audit\n\
+                           - `[Ctrl+A]`: Apply patch │ `[Ctrl+R]`: Rollback patch │ `[Ctrl+P]`: Pause node │ `[Ctrl+E]`: Export report (plain letters always type into the prompt)\n\
+                           - `[↑/↓]`: Navigate list / suggestions │ `[Tab]`: Autocomplete command │ `[Esc]`: Clear / Cancel │ `[Esc+Esc]`: Rewind Checkpoint".to_string(),
                 });
             } else if input == "/model" || input == "model" {
                 self.open_provider_model_modal(1);
@@ -912,14 +1355,42 @@ impl App {
                 }
             } else if input == "/pause" || input == "pause" {
                 self.toggle_pause_selected_node();
-            } else if input == "/apply" || input == "apply" || input == "a" {
+            } else if input == "/apply" || input == "apply" || input == "/patch" || input == "patch" || input == "a" {
                 self.apply_current_patch();
             } else if input == "/rollback" || input == "rollback" || input == "r" {
                 self.rollback_current_patch();
             } else if input == "/export" || input == "export" || input == "e" {
                 self.export_security_report();
-            } else if input == "/scan" || input == "scan" {
+            } else if input == "/scan" || input == "scan" || input == "/audit" || input == "audit" || input.starts_with("/scan ") || input.starts_with("/audit ") {
+                if input.contains("--diff-scope=local") {
+                    self.diff_scope = "LOCAL".to_string();
+                } else if input.contains("--diff-scope=full") {
+                    self.diff_scope = "FULL".to_string();
+                }
                 self.trigger_audit();
+            } else if input == "/secrets" || input == "secrets" {
+                let sec_findings = SecretHunterAgent::scan(&self.target_dir);
+                let count = sec_findings.len();
+                let mut added = 0;
+                for sf in sec_findings {
+                    if !self.findings.iter().any(|existing| existing.file_path == sf.file_path && existing.line_number == sf.line_number) {
+                        self.findings.push(sf);
+                        added += 1;
+                    }
+                }
+                self.current_tab = 1;
+                self.chat_messages.push(ChatMessage::Agent {
+                    sender: "secret_hunter".to_string(),
+                    text: format!(
+                        "### SecretHunter Entropy & Credential Audit\n\
+                         Scanned workspace for embedded API tokens, private keys, and high-entropy credentials.\n\
+                         • **Total Detected Secrets**: {}\n\
+                         • **Newly Added to Tab [2] Findings**: {}\n\
+                         Switched view to Tab [2] Findings.",
+                        count, added
+                    ),
+                });
+                self.action_msg = Some(format!("secrets audit: {count} detected ({added} new)"));
             } else if input == "/provider" {
                 self.open_provider_model_modal(0);
             } else if let Some(prov_str) = input.strip_prefix("/provider ") {
@@ -965,7 +1436,7 @@ impl App {
                 let _ = self.config.save();
                 self.open_setup_modal(2);
             } else if input == "/config" || input == "/status" || input == "/settings" {
-                self.open_setup_modal(0);
+                self.open_config_modal(0);
             } else if input == "/init-sec" || input.starts_with("/init-sec ") {
                 match SecurityContextRules::init_default_file(&self.target_dir, &self.profile) {
                     Ok(path) => {
@@ -1016,23 +1487,63 @@ impl App {
                 });
                 self.action_msg = Some("reachability analysis displayed".to_string());
             } else if input == "/shield" || input == "shield" {
-                let findings = MalwareShieldAgent::scan(&self.target_dir);
-                let count = findings.len();
+                let shield_findings = MalwareShieldAgent::scan(&self.target_dir);
+                let count = shield_findings.len();
+                let mut added = 0;
+                for sf in &shield_findings {
+                    if !self.findings.iter().any(|existing| existing.file_path == sf.file_path && existing.line_number == sf.line_number) {
+                        self.findings.push(sf.clone());
+                        added += 1;
+                    }
+                }
                 self.chat_messages.push(ChatMessage::Agent {
                     sender: "malware_shield".to_string(),
                     text: format!(
                         "### Pre-Install Malware Shield Audit\n\
                          Scanned workspace dependencies for typosquatting packages and malicious lifecycle scripts.\n\
-                         • **Suspicious / Malicious Findings**: {}\n{}",
+                         • **Suspicious / Malicious Findings**: {}\n\
+                         • **Newly Added to Tab [2] Findings**: {}\n{}",
                         count,
-                        if findings.is_empty() {
+                        added,
+                        if shield_findings.is_empty() {
                             "✓ All package manifests & lifecycle hooks clean. No typosquatting detected.".to_string()
                         } else {
-                            findings.iter().map(|f| format!("• **{}** ({}): {}", f.id, f.cwe, f.title)).collect::<Vec<_>>().join("\n")
+                            shield_findings.iter().map(|f| format!("• **{}** ({}): {}", f.id, f.cwe, f.title)).collect::<Vec<_>>().join("\n")
                         }
                     ),
                 });
-                self.action_msg = Some(format!("malware shield scan: {count} issues"));
+                self.action_msg = Some(format!("malware shield scan: {count} issues ({added} new)"));
+            } else if input == "/apk" || input.starts_with("/apk ") {
+                let path_arg = input.strip_prefix("/apk ").unwrap_or("").trim();
+                let apk_path = if path_arg.is_empty() {
+                    self.target_dir.clone()
+                } else {
+                    std::path::PathBuf::from(path_arg)
+                };
+                let apk_findings = ApkAndContainerGuardAgent::scan(&apk_path);
+                let count = apk_findings.len();
+                let mut added = 0;
+                for af in &apk_findings {
+                    if !self.findings.iter().any(|existing| existing.file_path == af.file_path && existing.line_number == af.line_number) {
+                        self.findings.push(af.clone());
+                        added += 1;
+                    }
+                }
+                self.current_tab = 1;
+                self.chat_messages.push(ChatMessage::Agent {
+                    sender: "apk_guard".to_string(),
+                    text: format!(
+                        "### Android & Container Defense Guard\n\
+                         Audited manifest exported components, permissions, and container specs for `{}`.\n\
+                         • **Vulnerabilities Found**: {}\n\
+                         • **Added to Tab [2] Findings**: {}\n\
+                         Switched view to Tab [2] Findings.",
+                        apk_path.display(),
+                        count,
+                        added
+                    ),
+                });
+                self.action_msg = Some(format!("apk guard: {count} issues ({added} new)"));
             } else if input == "/hotfix" || input.starts_with("/hotfix ") {
                 let pkg_name = input.strip_prefix("/hotfix ").unwrap_or("").trim();
                 if pkg_name.is_empty() {
@@ -1063,22 +1574,84 @@ impl App {
                     }
                 }
             } else if input == "/skills" || input.starts_with("/skills ") {
-                self.current_tab = 4;
-                let count = self.skills.skills.len();
+                let sub_action = input.strip_prefix("/skills ").unwrap_or("").trim();
+                if sub_action.starts_with("import") {
+                    let path_str = sub_action.strip_prefix("import").unwrap_or("").trim();
+                    if path_str.is_empty() {
+                        self.chat_messages.push(ChatMessage::Agent {
+                            sender: "orchestrator".to_string(),
+                            text: "Usage: `/skills import <path/to/custom.skill.md>`\nImports a Tier-2 custom skill into `.asterisk/skills/custom/`.".to_string(),
+                        });
+                    } else {
+                        let source_path = std::path::Path::new(path_str);
+                        match self.skills.import_custom_skill(&self.target_dir, source_path) {
+                            Ok(skill_id) => {
+                                self.current_tab = 4;
+                                self.chat_messages.push(ChatMessage::Agent {
+                                    sender: "orchestrator".to_string(),
+                                    text: format!("✓ **Custom Skill Imported**: Successfully registered `{skill_id}` into `.asterisk/skills/custom/`."),
+                                });
+                                self.action_msg = Some(format!("skill imported: {skill_id}"));
+                            }
+                            Err(e) => {
+                                self.chat_messages.push(ChatMessage::Agent {
+                                    sender: "orchestrator".to_string(),
+                                    text: format!("⚠️ Skill import failed: {e}"),
+                                });
+                                self.action_msg = Some(format!("skill import error: {e}"));
+                            }
+                        }
+                    }
+                } else if sub_action.starts_with("synth") {
+                    match self.skills.synthesize_project_skill(&self.target_dir, &self.profile) {
+                        Ok(skill_id) => {
+                            self.current_tab = 4;
+                            self.chat_messages.push(ChatMessage::Agent {
+                                sender: "orchestrator".to_string(),
+                                text: format!(
+                                    "✓ **Tier-3 Skill Synthesized**: Orchestrator generated `{skill_id}` tailored to detected tech stacks ({}) in `.asterisk/skills/synthesized/`.",
+                                    self.profile.languages.join(", ")
+                                ),
+                            });
+                            self.action_msg = Some(format!("skill synthesized: {skill_id}"));
+                        }
+                        Err(e) => {
+                            self.chat_messages.push(ChatMessage::Agent {
+                                sender: "orchestrator".to_string(),
+                                text: format!("⚠️ Skill synthesis failed: {e}"),
+                            });
+                            self.action_msg = Some(format!("skill synth error: {e}"));
+                        }
+                    }
+                } else {
+                    self.current_tab = 4;
+                    let count = self.skills.skills.len();
+                    self.chat_messages.push(ChatMessage::Agent {
+                        sender: "orchestrator".to_string(),
+                        text: format!(
+                            "### 3-Tier Interactive Skills Registry\n\
+                             Loaded **{}** progressive disclosure security defense skills.\n\
+                             Switched active view to Tab [5] Skills.\n\
+                             💡 *Sub-actions available: `/skills import <path>` and `/skills synth`.*",
+                            count
+                        ),
+                    });
+                    self.action_msg = Some("switched to skills tab".to_string());
+                }
+            } else if input.starts_with('/') {
                 self.chat_messages.push(ChatMessage::Agent {
                     sender: "orchestrator".to_string(),
-                    text: format!(
-                        "### 3-Tier Interactive Skills Registry\n\
-                         Loaded **{}** progressive disclosure security defense skills.\n\
-                         Switched active view to Tab [5] Skills.",
-                        count
-                    ),
+                    text: format!("⚠️ Unknown slash command `{input}`. Type `/help` for available security commands."),
                 });
-                self.action_msg = Some("switched to skills tab".to_string());
+                self.action_msg = Some(format!("unknown command: {input}"));
             } else {
                 if !self.config.is_api_key_configured() {
-                    self.open_setup_modal(2);
-                    self.action_msg = Some("authentication required: please set API key.".to_string());
+                    // Keep the typed text so the user does not lose it, and show a hint instead of a popup.
+                    self.prompt_input = input.clone();
+                    self.action_msg = Some(format!(
+                        "chat needs an API key for {} — type /provider (or /key) to set one.",
+                        self.config.provider.name()
+                    ));
                     return false;
                 }
                 self.chat_scroll = 0;
@@ -1086,13 +1659,15 @@ impl App {
                 let hub = SecurityAgentHub::new(self.target_dir.clone(), Arc::new(PolicyGate::default()), self.config.clone());
                 let sender = self.engine_tx.clone();
                 let prompt_text = input.clone();
-                tokio::spawn(async move {
-                    let reply = hub.query(&prompt_text).await;
-                    let _ = sender.send(EngineMessage::Chat(ChatMessage::Agent {
-                        sender: "orchestrator".to_string(),
-                        text: reply,
-                    }));
-                });
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(async move {
+                        let reply = hub.query(&prompt_text).await;
+                        let _ = sender.send(EngineMessage::Chat(ChatMessage::Agent {
+                            sender: "orchestrator".to_string(),
+                            text: reply,
+                        }));
+                    });
+                }
             }
         }
         false
@@ -1170,8 +1745,11 @@ impl App {
                             self.config.provider = *provider;
                             let all = AiProvider::ALL;
                             self.selected_provider_index = all.iter().position(|p| *p == *provider).unwrap_or(0);
+                            let _ = self.config.save();
                             if *provider == AiProvider::Custom && self.config.get_base_url().is_none() {
                                 self.open_url_modal();
+                            } else if self.config.requires_api_key() && !self.config.is_api_key_configured() {
+                                self.open_key_modal();
                             } else {
                                 self.open_model_modal();
                             }
@@ -1397,36 +1975,83 @@ impl App {
                         f,
                         area,
                         self.selected_provider_index,
+                        &self.config,
                     )
                 }
-                ActiveModal::SelectModel => {
-                    ModalView::render_model_list(
+                ActiveModal::ProviderDetail => {
+                    ModalView::render_provider_detail_hub(
                         f,
                         area,
                         self.active_provider,
-                        self.selected_model_index,
-                        self.config.is_api_key_configured(),
+                        &self.config,
                     )
                 }
-                ActiveModal::ApiKeyInput => {
+                ActiveModal::ConfigDashboard => {
+                    ModalView::render_config_dashboard(
+                        f,
+                        area,
+                        &self.config,
+                    )
+                }
+                ActiveModal::SelectModel => {
+                    let cur_model = self.config.get_model();
+                    ModalView::render_grouped_model_catalog(
+                        f,
+                        area,
+                        &self.model_search_query,
+                        &self.model_filtered_items,
+                        self.selected_model_index,
+                        &cur_model,
+                    )
+                }
+                ActiveModal::CustomProviderNameInput => {
                     ModalView::render_single_input_modal(
                         f,
                         area,
-                        &format!("API Key ({})", self.active_provider.name()),
-                        "Enter API key:",
-                        &self.key_modal_input,
-                        true,
+                        "Add Provider (Step 1 of 3: Name)",
+                        "Enter provider display name (e.g., OpenRouter, Mistral, Local LLM):",
+                        &self.custom_provider_name_input,
+                        false,
                         self.key_modal_error.as_deref(),
                     )
                 }
                 ActiveModal::BaseUrlInput => {
+                    let title = if self.active_provider == AiProvider::Custom {
+                        "Custom Provider Setup (Step 2 of 3: Endpoint URL)"
+                    } else if self.active_provider == AiProvider::OllamaLocal {
+                        "Ollama Setup (Step 1 of 1: Endpoint URL)"
+                    } else {
+                        &format!("{} Setup (Step 1 of 2: Endpoint URL)", self.active_provider.name())
+                    };
+                    let placeholder = match self.active_provider {
+                        AiProvider::Custom => "Enter API Base URL (e.g., https://openrouter.ai/api/v1):",
+                        AiProvider::OllamaLocal => "Enter Ollama Base URL (default: http://localhost:11434):",
+                        AiProvider::OpenAiGpt4o => "Enter OpenAI Base URL (default: https://api.openai.com/v1):",
+                        _ => "Enter custom API Base URL (leave empty for default):",
+                    };
                     ModalView::render_single_input_modal(
                         f,
                         area,
-                        &format!("Endpoint URL ({})", self.active_provider.name()),
-                        "Enter endpoint base URL:",
+                        title,
+                        placeholder,
                         &self.url_modal_input,
                         false,
+                        self.key_modal_error.as_deref(),
+                    )
+                }
+                ActiveModal::ApiKeyInput => {
+                    let title = if self.active_provider == AiProvider::Custom {
+                        "Custom Provider Setup (Step 3 of 3: API Key)"
+                    } else {
+                        &format!("{} Setup (Step 2 of 2: API Key)", self.active_provider.name())
+                    };
+                    ModalView::render_single_input_modal(
+                        f,
+                        area,
+                        title,
+                        "Enter API key (leave empty for no-auth endpoints):",
+                        &self.key_modal_input,
+                        true,
                         self.key_modal_error.as_deref(),
                     )
                 }
@@ -1477,22 +2102,50 @@ impl App {
             Span::styled(" 0 findings ", Style::default().fg(Color::Rgb(150, 152, 160)).bg(Color::Rgb(26, 27, 33)))
         };
 
-        let top_header = Line::from(vec![
+        // Adaptive header: path takes whatever room is left; low-priority pills drop first.
+        let files_txt = format!(" {} files ", self.profile.total_files);
+        let patches_txt = format!(" {} patches ", self.patches.len());
+        let prov_txt = format!(" {} ", self.active_provider.name());
+        let find_txt = findings_pill.content.to_string();
+        let badge_txt = status_badge.content.to_string();
+        let total_w = area.width as usize;
+        let w = |t: &str| crate::ui::fit::text_width(t);
+        let fixed_core = 1 + w(" asterisk ") + 2 + w(&prov_txt) + 2 + w(&badge_txt) + 2 + w(&find_txt);
+        let mut show_files = true;
+        let mut show_patches = true;
+        let extra = |sf: bool, sp: bool| (if sf { 2 + w(&files_txt) } else { 0 }) + (if sp { 2 + w(&patches_txt) } else { 0 });
+        let mut path_room = total_w.saturating_sub(fixed_core + extra(show_files, show_patches) + 2);
+        if path_room < 14 {
+            show_patches = false;
+            path_room = total_w.saturating_sub(fixed_core + extra(show_files, show_patches) + 2);
+        }
+        if path_room < 14 {
+            show_files = false;
+            path_room = total_w.saturating_sub(fixed_core + extra(show_files, show_patches) + 2);
+        }
+        let dir_txt = crate::ui::fit::ellipsize_start(&self.target_dir.display().to_string(), path_room.saturating_sub(2).max(6));
+
+        let mut header_spans = vec![
             Span::raw(" "),
             Span::styled(" asterisk ", Style::default().fg(Color::White).bg(Color::Rgb(28, 29, 36)).add_modifier(Modifier::BOLD)),
             Span::raw("  "),
-            Span::styled(format!(" {} ", self.target_dir.display()), Style::default().fg(Color::Rgb(170, 172, 180)).bg(Color::Rgb(24, 25, 31))),
-            Span::raw("  "),
-            Span::styled(format!(" {} files ", self.profile.total_files), Style::default().fg(Color::Rgb(150, 152, 160)).bg(Color::Rgb(24, 25, 31))),
-            Span::raw("  "),
-            findings_pill,
-            Span::raw("  "),
-            Span::styled(format!(" {} patches ", self.patches.len()), Style::default().fg(Color::Rgb(150, 152, 160)).bg(Color::Rgb(24, 25, 31))),
-            Span::raw("  "),
-            Span::styled(format!(" {} ", self.active_provider.name()), Style::default().fg(Color::Rgb(160, 200, 255)).bg(Color::Rgb(22, 28, 40))),
-            Span::raw("   "),
-            status_badge,
-        ]);
+            Span::styled(format!(" {dir_txt} "), Style::default().fg(Color::Rgb(170, 172, 180)).bg(Color::Rgb(24, 25, 31))),
+        ];
+        if show_files {
+            header_spans.push(Span::raw("  "));
+            header_spans.push(Span::styled(files_txt, Style::default().fg(Color::Rgb(150, 152, 160)).bg(Color::Rgb(24, 25, 31))));
+        }
+        header_spans.push(Span::raw("  "));
+        header_spans.push(findings_pill);
+        if show_patches {
+            header_spans.push(Span::raw("  "));
+            header_spans.push(Span::styled(patches_txt, Style::default().fg(Color::Rgb(150, 152, 160)).bg(Color::Rgb(24, 25, 31))));
+        }
+        header_spans.push(Span::raw("  "));
+        header_spans.push(Span::styled(prov_txt, Style::default().fg(Color::Rgb(160, 200, 255)).bg(Color::Rgb(22, 28, 40))));
+        header_spans.push(Span::raw("  "));
+        header_spans.push(status_badge);
+        let top_header = Line::from(header_spans);
         f.render_widget(Paragraph::new(top_header), root_chunks[0]);
 
         // Main Horizontal Split: 50% Left Chatbot vs 50% Right Workspace Area
@@ -1556,9 +2209,16 @@ impl App {
         tab_spans.push(Span::raw(" "));
         curr_x += 1;
 
-        for (idx, label) in tabs_info.iter() {
-            let width = label.chars().count() as u16;
+        // OpenCode-style tab strip: natural widths when they fit; otherwise the active tab
+        // stays complete and the others share the room, ellipsized (e.g. " 3 Patch… ").
+        let natural: Vec<usize> = tabs_info.iter().map(|(_, l)| l.chars().count()).collect();
+        let avail = (tab_bar_area.width as usize).saturating_sub(2);
+        let widths = crate::ui::fit::tab_widths(&natural, self.current_tab.min(tabs_info.len() - 1), avail, 1);
+
+        for ((idx, label), tw) in tabs_info.iter().zip(widths.iter()) {
             let is_selected = self.current_tab == *idx;
+            let shown = crate::ui::fit::fit_pad(label, *tw);
+            let width = *tw as u16;
 
             let pill_style = if is_selected {
                 Style::default()
@@ -1576,7 +2236,7 @@ impl App {
                 Rect::new(curr_x, right_chunks[0].y, width, 3),
             ));
 
-            tab_spans.push(Span::styled(label.clone(), pill_style));
+            tab_spans.push(Span::styled(shown, pill_style));
             tab_spans.push(Span::raw(" "));
             curr_x += width + 1;
         }
@@ -1607,30 +2267,24 @@ impl App {
         let footer_block = Block::default().style(Style::default().bg(Color::Rgb(14, 15, 19)));
         f.render_widget(footer_block, root_chunks[2]);
 
+        let fkey = Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36));
+        let flab = Style::default().fg(Color::Rgb(120, 122, 132));
         let footer = if self.patches.is_empty() {
-            Line::from(vec![
-                Span::raw("  "),
-                Span::styled(" [Space] ", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
-                Span::styled(" audit    ", Style::default().fg(Color::Rgb(120, 122, 132))),
-                Span::styled(" [Tab] ", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
-                Span::styled(" views    ", Style::default().fg(Color::Rgb(120, 122, 132))),
-                Span::styled(" [/config] ", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
-                Span::styled(" settings    ", Style::default().fg(Color::Rgb(120, 122, 132))),
-                Span::styled(" [Esc] ", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
-                Span::styled(" quit", Style::default().fg(Color::Rgb(120, 122, 132))),
-            ])
+            crate::ui::fit::hint_line(
+                &[("[Space]", "audit"), ("[Tab]", "views"), ("[/config]", "settings"), ("[Esc]", "quit")],
+                area.width as usize,
+                fkey,
+                flab,
+                "   ",
+            )
         } else {
-            Line::from(vec![
-                Span::raw("  "),
-                Span::styled(" [Tab] ", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
-                Span::styled(" views    ", Style::default().fg(Color::Rgb(120, 122, 132))),
-                Span::styled(" [a] ", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
-                Span::styled(" apply patch    ", Style::default().fg(Color::Rgb(120, 122, 132))),
-                Span::styled(" [r] ", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
-                Span::styled(" rollback    ", Style::default().fg(Color::Rgb(120, 122, 132))),
-                Span::styled(" [Esc] ", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
-                Span::styled(" quit", Style::default().fg(Color::Rgb(120, 122, 132))),
-            ])
+            crate::ui::fit::hint_line(
+                &[("[Tab]", "views"), ("[Ctrl+A]", "apply patch"), ("[Ctrl+R]", "rollback"), ("[Esc]", "quit")],
+                area.width as usize,
+                fkey,
+                flab,
+                "   ",
+            )
         };
         f.render_widget(Paragraph::new(footer), root_chunks[2]);
     }

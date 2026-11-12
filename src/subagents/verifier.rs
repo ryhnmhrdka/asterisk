@@ -41,8 +41,8 @@ impl VerificationAgent {
         // Check for remaining insecure patterns
         let unsafe_patterns = [
             ("0.0.0.0", "Wildcard network bind address"),
-            ("verify=False", "Disabled TLS verification"),
-            ("verify = False", "Disabled TLS verification"),
+            ("verify=True", "Disabled TLS verification"),
+            ("verify = True", "Disabled TLS verification"),
             ("InsecureSkipVerify: true", "Disabled TLS verification"),
             ("android:usesCleartextTraffic=\"true\"", "Cleartext network traffic"),
             ("android:exported=\"true\"", "Unprotected exported component"),

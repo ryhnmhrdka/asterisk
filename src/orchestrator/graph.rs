@@ -1,9 +1,176 @@
 use crate::types::{AgentStatus, SproutedNodeInfo};
-use rataflow::{Edge, Flow, Node, StepEdge, TextContent};
-use ratatui::style::{Color, Modifier, Style};
+use rataflow::{
+    Edge, EdgeMarker, EdgeStyle, Flow, Node, NodeContent, NodeRenderContext, StepEdge,
+};
+use ratatui::{
+    buffer::Buffer,
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, BorderType, Widget},
+};
 use std::collections::HashMap;
 use std::path::Path;
 use walkdir::WalkDir;
+
+#[derive(Debug, Clone, Default)]
+pub struct AgentNodeContent {
+    pub id: String,
+    pub title: String,
+    pub subtitle: String,
+    pub tier: String,
+    pub status: AgentStatus,
+    pub is_paused: bool,
+    pub findings_count: usize,
+}
+
+impl NodeContent for AgentNodeContent {
+    fn render(&self, ctx: &NodeRenderContext, buf: &mut Buffer) {
+        if ctx.area.width < 6 || ctx.area.height < 3 {
+            return;
+        }
+
+        // 1. Fill solid background to prevent canvas dots bleeding through
+        for y in ctx.area.top()..ctx.area.bottom() {
+            for x in ctx.area.left()..ctx.area.right() {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_char(' ');
+                    cell.set_bg(Color::Rgb(16, 18, 24));
+                }
+            }
+        }
+
+        // 2. Technical ASCII-like monochrome tags (No emojis)
+        let (tag, tag_color) = match self.tier.as_str() {
+            "planner" => ("[#] ORCH", Color::Rgb(140, 200, 255)),
+            "folder" => ("[/] DIR", Color::Rgb(160, 165, 180)),
+            "file" => ("[.] FILE", Color::Rgb(160, 165, 180)),
+            "subagent" => match self.id.as_str() {
+                "sub_secrets" => ("[>] SECRET", Color::Rgb(180, 170, 255)),
+                "sub_sast" => ("[>] SAST", Color::Rgb(180, 170, 255)),
+                "sub_sca" => ("[>] SCA", Color::Rgb(180, 170, 255)),
+                "sub_net" => ("[>] NET", Color::Rgb(180, 170, 255)),
+                "sub_patcher" => ("[!] PATCH", Color::Rgb(255, 160, 160)),
+                "sub_verifier" => ("[✓] VERIFY", Color::Rgb(140, 220, 180)),
+                _ => ("[>] AGENT", Color::Rgb(180, 170, 255)),
+            },
+            "gate" => ("[#] GATE", Color::Rgb(255, 200, 90)),
+            _ => ("[*] NODE", Color::Rgb(160, 165, 180)),
+        };
+
+        // 3. Border styling
+        let border_color = if ctx.selected {
+            Color::Rgb(130, 220, 255)
+        } else if self.is_paused {
+            Color::Rgb(60, 62, 70)
+        } else if self.status == AgentStatus::Running {
+            Color::Rgb(100, 180, 240)
+        } else if self.findings_count > 0 {
+            Color::Rgb(220, 80, 80)
+        } else {
+            Color::Rgb(65, 70, 85)
+        };
+
+        let mut border_style = Style::default().fg(border_color);
+        if ctx.selected {
+            border_style = border_style.add_modifier(Modifier::BOLD);
+        }
+
+        let mut block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(border_style)
+            .title_top(Line::from(vec![
+                Span::styled(format!(" {} ", tag), Style::default().fg(tag_color).add_modifier(Modifier::BOLD)),
+            ]));
+
+        if ctx.selected {
+            let action_hint = if self.is_paused {
+                "[Space: resume]"
+            } else {
+                "[Space: pause]"
+            };
+            block = block.title_bottom(Line::from(vec![
+                Span::styled(format!(" {} ", action_hint), Style::default().fg(Color::Rgb(140, 220, 255)).add_modifier(Modifier::BOLD)),
+            ]));
+        }
+
+        let inner = block.inner(ctx.area);
+        block.render(ctx.area, buf);
+
+        if inner.height == 0 || inner.width < 4 {
+            return;
+        }
+
+        let content_x = inner.x + 1;
+        let avail_w = (inner.width as usize).saturating_sub(2);
+
+        // 4. Row 0: Title text
+        let title_style = if ctx.selected {
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Rgb(230, 235, 245))
+        };
+        let title_truncated = if self.title.len() > avail_w {
+            format!("{}...", &self.title[..avail_w.saturating_sub(3)])
+        } else {
+            self.title.clone()
+        };
+        buf.set_string(content_x, inner.y, &title_truncated, title_style);
+
+        // 5. Row 1: Subtitle / Scope description
+        if inner.height > 1 {
+            let sub_style = Style::default().fg(Color::Rgb(125, 130, 145));
+            let sub_truncated = if self.subtitle.len() > avail_w {
+                format!("{}...", &self.subtitle[..avail_w.saturating_sub(3)])
+            } else {
+                self.subtitle.clone()
+            };
+            buf.set_string(content_x, inner.y + 1, &sub_truncated, sub_style);
+        }
+
+        // 6. Row 2: Status pill + findings count badge
+        if inner.height > 2 {
+            let (status_text, status_fg, status_bg, is_bold) = if self.is_paused {
+                ("■ PAUSED", Color::Rgb(150, 155, 165), Color::Rgb(32, 34, 44), false)
+            } else {
+                match self.status {
+                    AgentStatus::Idle => ("○ IDLE", Color::Rgb(140, 145, 155), Color::Rgb(28, 30, 38), false),
+                    AgentStatus::Planning => ("◐ PLAN", Color::Rgb(160, 210, 255), Color::Rgb(25, 45, 70), true),
+                    AgentStatus::WaitingConfirmation => ("▲ CONFIRM", Color::Rgb(255, 200, 80), Color::Rgb(65, 50, 20), true),
+                    AgentStatus::Running => ("● RUNNING", Color::Rgb(100, 240, 255), Color::Rgb(18, 55, 80), true),
+                    AgentStatus::Paused => ("■ PAUSED", Color::Rgb(150, 155, 165), Color::Rgb(32, 34, 44), false),
+                    AgentStatus::Adapting => ("◈ ADAPTING", Color::Rgb(210, 170, 255), Color::Rgb(55, 30, 75), true),
+                    AgentStatus::Success => ("✓ PASSED", Color::Rgb(120, 240, 160), Color::Rgb(20, 55, 38), true),
+                    AgentStatus::Failed => ("✗ ALERT", Color::Rgb(255, 110, 110), Color::Rgb(65, 22, 22), true),
+                }
+            };
+
+            let mut status_style = Style::default().fg(status_fg).bg(status_bg);
+            if is_bold {
+                status_style = status_style.add_modifier(Modifier::BOLD);
+            }
+
+            let status_span = Span::styled(format!(" {} ", status_text), status_style);
+            let mut line_spans = vec![status_span];
+
+            if self.findings_count > 0 {
+                line_spans.push(Span::raw(" "));
+                line_spans.push(Span::styled(
+                    format!(" !{} VULN ", self.findings_count),
+                    Style::default().fg(Color::White).bg(Color::Rgb(190, 40, 40)).add_modifier(Modifier::BOLD),
+                ));
+            } else if self.status == AgentStatus::Success {
+                line_spans.push(Span::raw(" "));
+                line_spans.push(Span::styled(
+                    " ✓ CLEAN ",
+                    Style::default().fg(Color::Rgb(100, 220, 140)).bg(Color::Rgb(20, 45, 32)),
+                ));
+            }
+
+            let line = Line::from(line_spans);
+            buf.set_line(content_x, inner.y + 2, &line, avail_w as u16);
+        }
+    }
+}
 
 pub struct AgentGraphBuilder;
 
@@ -16,7 +183,7 @@ impl AgentGraphBuilder {
             "orch".to_string(),
             SproutedNodeInfo {
                 id: "orch".to_string(),
-                label: "orchestrator\ncore planner".to_string(),
+                label: "Orchestrator\nautonomous threat planner".to_string(),
                 tier: "planner".to_string(),
                 target_path: None,
                 status: AgentStatus::Idle,
@@ -73,7 +240,7 @@ impl AgentGraphBuilder {
                 id.clone(),
                 SproutedNodeInfo {
                     id,
-                    label: format!("folder\n{folder}"),
+                    label: format!("{folder}\ndirectory scope"),
                     tier: "folder".to_string(),
                     target_path: Some(folder.clone()),
                     status: AgentStatus::Idle,
@@ -90,7 +257,7 @@ impl AgentGraphBuilder {
                 id.clone(),
                 SproutedNodeInfo {
                     id: id.clone(),
-                    label: format!("file\n{file}"),
+                    label: format!("{file}\ntarget source file"),
                     tier: "file".to_string(),
                     target_path: Some(file.clone()),
                     status: AgentStatus::Idle,
@@ -107,7 +274,7 @@ impl AgentGraphBuilder {
             "sub_secrets".to_string(),
             SproutedNodeInfo {
                 id: "sub_secrets".to_string(),
-                label: "secret hunter\n[entropy miner]".to_string(),
+                label: "Secret Hunter\nentropy & git scan".to_string(),
                 tier: "subagent".to_string(),
                 target_path: None,
                 status: AgentStatus::Idle,
@@ -121,7 +288,7 @@ impl AgentGraphBuilder {
             "sub_sast".to_string(),
             SproutedNodeInfo {
                 id: "sub_sast".to_string(),
-                label: "sast analyzer\n[ast reachability]".to_string(),
+                label: "AST Code Guard\ntaint flow analysis".to_string(),
                 tier: "subagent".to_string(),
                 target_path: None,
                 status: AgentStatus::Idle,
@@ -135,7 +302,7 @@ impl AgentGraphBuilder {
             "sub_net".to_string(),
             SproutedNodeInfo {
                 id: "sub_net".to_string(),
-                label: "network prober\n[surface linter]".to_string(),
+                label: "Surface Linter\nnetwork & transport".to_string(),
                 tier: "subagent".to_string(),
                 target_path: None,
                 status: AgentStatus::Idle,
@@ -149,7 +316,7 @@ impl AgentGraphBuilder {
             "sub_sca".to_string(),
             SproutedNodeInfo {
                 id: "sub_sca".to_string(),
-                label: "dependency guard\n[manifest sca]".to_string(),
+                label: "Dependency Guard\nphantom sca audit".to_string(),
                 tier: "subagent".to_string(),
                 target_path: None,
                 status: AgentStatus::Idle,
@@ -164,7 +331,7 @@ impl AgentGraphBuilder {
             "sub_patcher".to_string(),
             SproutedNodeInfo {
                 id: "sub_patcher".to_string(),
-                label: "remediation engine\n[auto-hardening]".to_string(),
+                label: "Remediation Engine\nauto-hardening patch".to_string(),
                 tier: "subagent".to_string(),
                 target_path: None,
                 status: AgentStatus::Idle,
@@ -178,7 +345,7 @@ impl AgentGraphBuilder {
             "sub_verifier".to_string(),
             SproutedNodeInfo {
                 id: "sub_verifier".to_string(),
-                label: "test verifier\n[security unit tests]".to_string(),
+                label: "Test Verifier\nsandbox unit tests".to_string(),
                 tier: "subagent".to_string(),
                 target_path: None,
                 status: AgentStatus::Idle,
@@ -192,7 +359,7 @@ impl AgentGraphBuilder {
             "defense_gate".to_string(),
             SproutedNodeInfo {
                 id: "defense_gate".to_string(),
-                label: "pre-prod defense gate\n[build guard]".to_string(),
+                label: "Pre-Prod Defense Gate\nbuild certification".to_string(),
                 tier: "gate".to_string(),
                 target_path: None,
                 status: AgentStatus::Idle,
@@ -212,7 +379,7 @@ impl AgentGraphBuilder {
 
     pub fn build_sprouted_graph(
         nodes_info: &HashMap<String, SproutedNodeInfo>,
-    ) -> Result<Flow<TextContent, StepEdge>, rataflow::Error> {
+    ) -> Result<Flow<AgentNodeContent, StepEdge>, rataflow::Error> {
         let mut nodes = Vec::new();
 
         // Categorize into horizontal columns
@@ -236,39 +403,67 @@ impl AgentGraphBuilder {
 
         let mut layout_coords: Vec<(String, (f64, f64), String)> = Vec::new();
 
-        // Column 0: Orchestrator
-        layout_coords.push(("orch".to_string(), (2.0, 14.0), "orchestrator\ncore planner".to_string()));
+        // Column 0: Orchestrator (x = 2.0, y = 13.0)
+        let orch_label = nodes_info
+            .get("orch")
+            .map(|n| n.label.clone())
+            .unwrap_or_else(|| "Orchestrator\nautonomous threat planner".to_string());
+        layout_coords.push(("orch".to_string(), (2.0, 13.0), orch_label));
 
-        // Column 1: Folders (x = 28.0)
+        // Column 1: Folders (x = 36.0, gap = 8.0)
         let folder_count = folder_nodes.len().max(1);
         let folder_gap = 24.0 / (folder_count as f64);
         for (i, f) in folder_nodes.iter().enumerate() {
-            let y = 6.0 + (i as f64) * folder_gap;
-            layout_coords.push((f.id.clone(), (28.0, y), f.label.clone()));
+            let y = if folder_count == 1 {
+                13.0
+            } else {
+                2.0 + (i as f64) * folder_gap
+            };
+            layout_coords.push((f.id.clone(), (36.0, y), f.label.clone()));
         }
 
-        // Column 2: Files (x = 54.0)
+        // Column 2: Files (x = 70.0, gap = 8.0)
         let file_count = file_nodes.len().max(1);
         let file_gap = 24.0 / (file_count as f64);
         for (i, f) in file_nodes.iter().enumerate() {
-            let y = 6.0 + (i as f64) * file_gap;
-            layout_coords.push((f.id.clone(), (54.0, y), f.label.clone()));
+            let y = if file_count == 1 {
+                13.0
+            } else {
+                2.0 + (i as f64) * file_gap
+            };
+            layout_coords.push((f.id.clone(), (70.0, y), f.label.clone()));
         }
 
-        // Column 3: Review Modules (x = 82.0)
+        // Column 3: Review Modules (x = 104.0, gap = 8.0)
         let sub_count = subagent_nodes.len().max(1);
         let sub_gap = 26.0 / (sub_count as f64);
         for (i, s) in subagent_nodes.iter().enumerate() {
-            let y = 3.0 + (i as f64) * sub_gap;
-            layout_coords.push((s.id.clone(), (82.0, y), s.label.clone()));
+            let y = if sub_count == 1 {
+                13.0
+            } else {
+                2.0 + (i as f64) * sub_gap
+            };
+            layout_coords.push((s.id.clone(), (104.0, y), s.label.clone()));
         }
 
-        // Column 4: Remediation & Verification (x = 114.0)
-        layout_coords.push(("sub_patcher".to_string(), (114.0, 9.0), "remediation\n[auto-hardening]".to_string()));
-        layout_coords.push(("sub_verifier".to_string(), (114.0, 19.0), "test verifier\n[security unit tests]".to_string()));
+        // Column 4: Remediation & Verification (x = 138.0, gap = 8.0)
+        let patcher_label = nodes_info
+            .get("sub_patcher")
+            .map(|n| n.label.clone())
+            .unwrap_or_else(|| "Remediation Engine\nauto-hardening patch".to_string());
+        let verifier_label = nodes_info
+            .get("sub_verifier")
+            .map(|n| n.label.clone())
+            .unwrap_or_else(|| "Test Verifier\nsandbox unit tests".to_string());
+        layout_coords.push(("sub_patcher".to_string(), (138.0, 8.0), patcher_label));
+        layout_coords.push(("sub_verifier".to_string(), (138.0, 18.0), verifier_label));
 
-        // Column 5: Defense Gate (x = 146.0)
-        layout_coords.push(("defense_gate".to_string(), (146.0, 14.0), "pre-prod defense gate\n[build guard]".to_string()));
+        // Column 5: Defense Gate (x = 172.0, gap = 8.0)
+        let gate_label = nodes_info
+            .get("defense_gate")
+            .map(|n| n.label.clone())
+            .unwrap_or_else(|| "Pre-Prod Defense Gate\nbuild certification".to_string());
+        layout_coords.push(("defense_gate".to_string(), (172.0, 13.0), gate_label));
 
         for (id, pos, label) in &layout_coords {
             let default_info = SproutedNodeInfo {
@@ -284,30 +479,23 @@ impl AgentGraphBuilder {
 
             let info = nodes_info.get(id).unwrap_or(&default_info);
 
-            let (border_color, status_text, is_bold) = if info.is_paused {
-                (Color::DarkGray, "paused", false)
+            let (title, subtitle) = if let Some((t, s)) = label.split_once('\n') {
+                (t.trim().to_string(), s.trim().to_string())
             } else {
-                match info.status {
-                    AgentStatus::Idle => (Color::DarkGray, "idle", false),
-                    AgentStatus::Planning => (Color::Gray, "planning", false),
-                    AgentStatus::WaitingConfirmation => (Color::White, "confirm?", true),
-                    AgentStatus::Running => (Color::White, "running", true),
-                    AgentStatus::Paused => (Color::DarkGray, "paused", false),
-                    AgentStatus::Adapting => (Color::White, "adapting", true),
-                    AgentStatus::Success => (Color::Gray, "completed", false),
-                    AgentStatus::Failed => (Color::White, "action required", true),
-                }
+                (label.clone(), String::new())
             };
 
-            let display_text = format!("{}\n[{}]", label, status_text);
-            let mut node = Node::from_text(id.clone(), *pos, display_text);
-            node.content.border_style = Some(Style::default().fg(border_color));
+            let content = AgentNodeContent {
+                id: id.clone(),
+                title,
+                subtitle,
+                tier: info.tier.clone(),
+                status: info.status,
+                is_paused: info.is_paused,
+                findings_count: info.findings_count,
+            };
 
-            let mut text_style = Style::default().fg(if is_bold { Color::White } else { Color::Gray });
-            if is_bold {
-                text_style = text_style.add_modifier(Modifier::BOLD);
-            }
-            node.content.text_style = Some(text_style);
+            let node = Node::new(id.clone(), *pos, (26.0, 5.0), content);
             nodes.push(node);
         }
 
@@ -345,7 +533,12 @@ impl AgentGraphBuilder {
     }
 }
 
-fn create_step_edge(edge_id: &str, src: &str, dst: &str, nodes_info: &HashMap<String, SproutedNodeInfo>) -> Edge<StepEdge> {
+fn create_step_edge(
+    edge_id: &str,
+    src: &str,
+    dst: &str,
+    nodes_info: &HashMap<String, SproutedNodeInfo>,
+) -> Edge<StepEdge> {
     let src_status = nodes_info.get(src).map(|n| (n.status, n.is_paused));
     let dst_status = nodes_info.get(dst).map(|n| (n.status, n.is_paused));
 
@@ -355,5 +548,24 @@ fn create_step_edge(edge_id: &str, src: &str, dst: &str, nodes_info: &HashMap<St
         _ => false,
     };
 
-    Edge::new(edge_id.to_string(), src.to_string(), dst.to_string()).with_animated(is_animating)
+    let is_success = match (src_status, dst_status) {
+        (Some((AgentStatus::Success, _)), Some((AgentStatus::Success, _))) => true,
+        _ => false,
+    };
+
+    let stroke_color = if is_animating {
+        Color::Rgb(100, 220, 255)
+    } else if is_success {
+        Color::Rgb(90, 200, 140)
+    } else {
+        Color::Rgb(65, 70, 85)
+    };
+
+    let style = EdgeStyle::default()
+        .with_stroke_style(Style::default().fg(stroke_color))
+        .with_marker_end(EdgeMarker::ArrowClosed);
+
+    Edge::new(edge_id.to_string(), src.to_string(), dst.to_string())
+        .with_content(StepEdge::default().with_style(style).with_stem_length(2.0))
+        .with_animated(is_animating)
 }

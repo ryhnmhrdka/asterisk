@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 #[test]
 fn test_harness_full_pipeline() {
+    isolate_home();
     let target = PathBuf::from("./tests/fixtures/vulnerable_repo");
     assert!(target.exists(), "Target fixture folder must exist");
 
@@ -75,6 +76,7 @@ fn test_harness_full_pipeline() {
 
 #[test]
 fn test_app_empty_state_and_auth_modal_gate() {
+    isolate_home();
     use asterisk::ui::App;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -112,6 +114,7 @@ fn test_app_empty_state_and_auth_modal_gate() {
 
 #[test]
 fn test_command_suggestions_and_execution() {
+    isolate_home();
     use asterisk::types::{get_matching_commands, ChatMessage};
     use asterisk::ui::App;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -175,6 +178,7 @@ fn test_command_suggestions_and_execution() {
 
 #[test]
 fn test_provider_model_selector_and_custom_provider_setup_flow() {
+    isolate_home();
     use asterisk::types::AiProvider;
     use asterisk::ui::app::ActiveModal;
     use asterisk::ui::App;
@@ -193,23 +197,30 @@ fn test_provider_model_selector_and_custom_provider_setup_flow() {
     app.handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::empty()));
     assert_eq!(app.active_provider, AiProvider::OpenAiGpt4o);
 
-    // Pressing Enter advances to SelectModel for OpenAI
+    // Pressing Enter on provider opens independent ProviderDetail hub
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
-    assert_eq!(app.active_modal, ActiveModal::SelectModel);
+    assert_eq!(app.active_modal, ActiveModal::ProviderDetail);
+    assert_eq!(app.active_provider, AiProvider::OpenAiGpt4o);
 
-    // Navigating models and pressing Enter advances to ApiKeyInput (since OpenAI requires key and none is configured)
-    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::empty()));
-    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    // Pressing 1 in ProviderDetail hub opens ApiKeyInput for this provider
+    app.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::empty()));
     assert_eq!(app.active_modal, ActiveModal::ApiKeyInput);
-    assert_eq!(app.config.provider, AiProvider::OpenAiGpt4o);
 
-    // Entering key and saving
+    // Entering key and saving (returns to previous ProviderDetail hub)
     app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::empty()));
     app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::empty()));
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::ProviderDetail);
+    assert_eq!(app.config.get_api_key_for_provider(AiProvider::OpenAiGpt4o).as_deref(), Some("sk"));
+
+    // Pressing Esc in ProviderDetail hub returns to SelectProvider list
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::SelectProvider);
+
+    // Pressing Esc in SelectProvider closes modal
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
     assert!(!app.show_key_modal);
     assert_eq!(app.active_modal, ActiveModal::None);
-    assert_eq!(app.config.get_api_key().as_deref(), Some("sk"));
 
     // 2. /custom command opens the 1-input URL setup modal
     app.config.api_key = None;
@@ -241,6 +252,7 @@ fn test_provider_model_selector_and_custom_provider_setup_flow() {
 
 #[test]
 fn test_slash_command_isolation_and_tab_click_accuracy() {
+    isolate_home();
     use asterisk::types::ChatMessage;
     use asterisk::ui::app::FocusedPane;
     use asterisk::ui::App;
@@ -461,6 +473,7 @@ async fn test_tri_stage_pipeline_sqlite_persistence_and_commands() {
 
 #[test]
 fn test_remove_send_button_and_unauthenticated_model_scan_gate() {
+    isolate_home();
     use asterisk::types::{AiProvider, ChatMessage};
     use asterisk::ui::app::ActiveModal;
     use asterisk::ui::App;
@@ -470,7 +483,9 @@ fn test_remove_send_button_and_unauthenticated_model_scan_gate() {
 
     let mut app = App::new(PathBuf::from("."), false);
     app.config.api_key = None;
+    app.config.provider_keys.clear();
     app.config.provider = AiProvider::AnthropicClaude;
+    app.active_provider = AiProvider::AnthropicClaude;
 
     // 1. Verify prompt bar rendering without Send button (renders full width)
     let backend = TestBackend::new(120, 40);
@@ -515,33 +530,417 @@ fn test_remove_send_button_and_unauthenticated_model_scan_gate() {
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
     assert!(!app.show_key_modal);
 
-    // 4. /model opens modal; without key, model presets are locked / empty
+    // 4. /model opens grouped model catalog; all models displayed grouped by provider
     app.prompt_input = "/model".to_string();
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
     assert!(app.show_key_modal);
     assert_eq!(app.active_modal, ActiveModal::SelectModel);
+    assert!(!app.model_filtered_items.is_empty(), "Model catalog must contain all models");
 
-    // Render modal frame to inspect click targets
-    terminal.draw(|f| app.render(f)).unwrap();
-    assert!(app.click_targets.modal.as_ref().unwrap().model_preset_buttons.is_empty(), "Model presets must be empty/locked without API key");
-
-    // Pressing Enter in locked SelectModel modal advances to ApiKeyInput
+    // Setting key via /key
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+    app.prompt_input = "/key my-k".to_string();
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
-    assert_eq!(app.active_modal, ActiveModal::ApiKeyInput);
-
-    // 5. Setting valid API key unlocks model selector
-    app.handle_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::empty()));
-    app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::empty()));
-    app.handle_key(KeyEvent::new(KeyCode::Char('-'), KeyModifiers::empty()));
-    app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::empty()));
-    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
-    assert!(!app.show_key_modal);
     assert!(app.config.is_api_key_configured());
 
-    // Now /model opens unlocked model selector with presets
+    // Now /model opens model selector with populated items
     app.prompt_input = "/model".to_string();
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
     assert_eq!(app.active_modal, ActiveModal::SelectModel);
+    assert!(!app.model_filtered_items.is_empty(), "Model catalog must be populated once authenticated");
+}
+
+#[test]
+fn test_provider_hub_dynamic_synchronization_and_per_provider_storage() {
+    isolate_home();
+    use asterisk::types::AiProvider;
+    use asterisk::ui::app::ActiveModal;
+    use asterisk::ui::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let mut app = App::new(PathBuf::from("."), false);
+    app.config.api_key = None;
+    app.config.provider_keys.clear();
+    app.config.provider_base_urls.clear();
+
+    // 1. Initial State: DeepSeek is not configured, Ollama is local ready
+    assert!(!app.config.is_provider_configured(AiProvider::DeepSeek));
+    assert_eq!(app.config.mask_key_for_provider(AiProvider::DeepSeek), "None (Unset)");
+    assert!(app.config.is_provider_configured(AiProvider::OllamaLocal));
+    assert_eq!(app.config.mask_key_for_provider(AiProvider::OllamaLocal), "Not Required (Offline Local)");
+
+    // 2. Open /provider modal
+    app.prompt_input = "/provider".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::SelectProvider);
+
+    // Navigate to DeepSeek (index 3 or press '4')
+    app.handle_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::empty()));
+    assert_eq!(app.active_provider, AiProvider::DeepSeek);
+
+    // Press Enter to open dedicated Provider Hub for DeepSeek
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::ProviderDetail);
+    assert_eq!(app.active_provider, AiProvider::DeepSeek);
+
+    // 3. Test rendering Provider Hub under standard and constrained terminals (no panic, no overflow)
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|f| app.render(f)).unwrap();
-    assert!(!app.click_targets.modal.as_ref().unwrap().model_preset_buttons.is_empty(), "Model presets must be populated once authenticated");
+
+    let backend_small = TestBackend::new(60, 20);
+    let mut terminal_small = Terminal::new(backend_small).unwrap();
+    terminal_small.draw(|f| app.render(f)).unwrap();
+
+    // 4. Press '1' to input API Key for DeepSeek
+    app.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::ApiKeyInput);
+    app.key_modal_input = "sk-deepseek-test123456".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+    // Must return to ProviderDetail for DeepSeek
+    assert_eq!(app.active_modal, ActiveModal::ProviderDetail);
+    assert!(app.config.is_provider_configured(AiProvider::DeepSeek));
+    assert_eq!(
+        app.config.mask_key_for_provider(AiProvider::DeepSeek),
+        "sk-d••••••••3456"
+    );
+
+    // 5. Press '2' to input Base URL for DeepSeek
+    app.handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::BaseUrlInput);
+    app.url_modal_input = "https://custom.deepseek.local/v1".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+    // Must return to ProviderDetail
+    assert_eq!(app.active_modal, ActiveModal::ProviderDetail);
+    assert_eq!(
+        app.config.get_base_url_for_provider(AiProvider::DeepSeek).as_deref(),
+        Some("https://custom.deepseek.local/v1")
+    );
+
+    // 6. Verify other providers remain unpolluted and dynamically consistent
+    assert_eq!(
+        app.config.get_base_url_for_provider(AiProvider::OllamaLocal).as_deref(),
+        Some("http://localhost:11434")
+    );
+
+    // 7. Press Esc to return to SelectProvider list
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::SelectProvider);
+
+    // Press Esc again to return to workspace
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::None);
+    assert!(!app.show_key_modal);
+}
+
+#[test]
+fn test_fit_helpers_never_exceed_width() {
+    isolate_home();
+    use asterisk::ui::fit::{ellipsize, ellipsize_start, hint_line, tab_widths, text_width};
+    use ratatui::style::Style;
+
+    for w in 0..40usize {
+        assert!(text_width(&ellipsize("claude-3-7-sonnet-20250219 ✓ 日本語", w)) <= w);
+        assert!(text_width(&ellipsize_start("/home/frigg/Projects/asterisk/src", w)) <= w);
+        let line = hint_line(
+            &[("[1-6/↑↓]", "Select"), ("[Enter]", "Open Hub"), ("[k]", "API Key"), ("[u]", "Endpoint URL"), ("[Esc]", "Back")],
+            w,
+            Style::default(),
+            Style::default(),
+            "  ",
+        );
+        if w >= 6 {
+            assert!(line.width() <= w, "hint overflow at width {w}: {}", line.width());
+        }
+    }
+    let natural = [8usize, 17, 17, 8, 9];
+    for avail in [20usize, 30, 40, 60, 80] {
+        for active in 0..5 {
+            let ws = tab_widths(&natural, active, avail, 1);
+            assert_eq!(ws[active], natural[active].min(ws[active]));
+            if avail >= 5 * 5 + 4 + 12 {
+                assert!(ws.iter().sum::<usize>() + 4 <= avail, "tabs overflow avail={avail} {ws:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn test_render_all_screens_at_multiple_terminal_sizes() {
+    isolate_home();
+    use asterisk::types::AiProvider;
+    use asterisk::ui::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    for (w, h) in [(60u16, 20u16), (80, 24), (100, 30), (140, 40)] {
+        let mut app = App::new(PathBuf::from("/home/frigg/Projects/a-very-long-project-directory-name/subdir"), false);
+        app.config.provider = AiProvider::DeepSeek;
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        for tab in 0..5usize {
+            app.current_tab = tab;
+            term.draw(|f| app.render(f)).unwrap();
+        }
+        for cmd in ["/", "/provider", "/model", "/config"] {
+            app.prompt_input = cmd.to_string();
+            term.draw(|f| app.render(f)).unwrap();
+            if cmd != "/" {
+                app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+                term.draw(|f| app.render(f)).unwrap();
+                app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+            }
+            app.prompt_input.clear();
+        }
+    }
+}
+
+/// Tests must never read or write the developer's real ~/.config/asterisk/config.json.
+fn isolate_home() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let dir = std::env::temp_dir().join(format!("asterisk-test-home-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        // SAFETY: runs once, before any test touches config; all tests call this first.
+        unsafe { std::env::set_var("HOME", &dir) };
+    });
+}
+
+#[test]
+fn test_hotkeys_do_not_collide_with_typing_or_open_wrong_modal() {
+    isolate_home();
+    use asterisk::types::AiProvider;
+    use asterisk::ui::app::ActiveModal;
+    use asterisk::ui::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = App::new(PathBuf::from("."), false);
+    app.config.api_key = None;
+    app.config.provider_keys.clear();
+    app.config.provider = AiProvider::DeepSeek;
+
+    // Plain letters must always type into the prompt (not trigger actions)
+    for c in "apply run export".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));
+    }
+    assert_eq!(app.prompt_input, "apply run export");
+    app.prompt_input.clear();
+
+    // Space / Enter without key -> NO popup, only a hint; typed text is kept
+    app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::None);
+    assert!(!app.show_key_modal);
+    assert!(app.action_msg.as_deref().unwrap_or("").contains("/provider"));
+    app.prompt_input = "hello".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::None);
+    assert!(!app.show_key_modal);
+    assert_eq!(app.prompt_input, "hello");
+    app.prompt_input.clear();
+
+    // Alt+3 switches tab; plain 3 types
+    app.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::ALT));
+    assert_eq!(app.current_tab, 2);
+    app.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::empty()));
+    assert_eq!(app.prompt_input, "3");
+}
+
+#[test]
+fn test_live_model_discovery_and_provider_sync() {
+    isolate_home();
+    use asterisk::execution::EngineMessage;
+    use asterisk::types::AiProvider;
+    use asterisk::ui::app::ActiveModal;
+    use asterisk::ui::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = App::new(PathBuf::from("."), false);
+    app.config.api_key = None;
+    app.config.provider = AiProvider::DeepSeek;
+
+    // 1. Initial State: No discovered models, uses defaults
+    assert!(!app.config.has_discovered_models(AiProvider::DeepSeek));
+    let initial_models = app.config.get_models_for_provider(AiProvider::DeepSeek);
+    assert_eq!(initial_models, AiProvider::DeepSeek.preset_models());
+
+    // 2. Open /provider -> DeepSeek -> ProviderDetail
+    app.prompt_input = "/provider".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::SelectProvider);
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::empty()));
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::ProviderDetail);
+
+    // 3. Trigger live sync via shortcut '4'
+    app.handle_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::empty()));
+    assert!(app.action_msg.as_deref().unwrap_or("").contains("API"));
+
+    // 4. Simulate API returned models message
+    let mock_models = vec![
+        "deepseek-chat".to_string(),
+        "deepseek-coder-v2".to_string(),
+        "deepseek-reasoner-r1".to_string(),
+    ];
+    let _ = app.engine_tx.send(EngineMessage::ModelsDiscovered {
+        provider: AiProvider::DeepSeek,
+        models: mock_models.clone(),
+    });
+
+    // Update app loop to process engine message
+    app.update();
+
+    // 5. Verify models are stored, live flag is active, and /model reflects discovered list
+    assert!(app.config.has_discovered_models(AiProvider::DeepSeek));
+    assert_eq!(
+        app.config.get_models_for_provider(AiProvider::DeepSeek),
+        mock_models
+    );
+
+    // Open /model and verify discovered items are present
+    app.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::SelectModel);
+
+    let has_coder_v2 = app
+        .model_filtered_items
+        .iter()
+        .any(|(prov, name, _)| *prov == AiProvider::DeepSeek && name == "deepseek-coder-v2");
+    assert!(has_coder_v2, "Newly discovered live model must be present in model catalog");
+}
+
+#[test]
+fn test_sequential_provider_wizard_custom_and_predefined() {
+    isolate_home();
+    use asterisk::types::AiProvider;
+    use asterisk::ui::app::ActiveModal;
+    use asterisk::ui::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = App::new(PathBuf::from("."), false);
+
+    // =========================================================================
+    // 1. CUSTOM PROVIDER: Complete 3-Step Wizard Flow (Name -> URL -> Key -> Model)
+    // =========================================================================
+    app.start_provider_setup_flow(AiProvider::Custom);
+    assert!(app.show_key_modal);
+    assert_eq!(app.active_modal, ActiveModal::CustomProviderNameInput);
+
+    // Step 1: Type custom provider name
+    app.custom_provider_name_input.clear();
+    for c in "OpenRouter AI".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));
+    }
+    assert_eq!(app.custom_provider_name_input, "OpenRouter AI");
+
+    // Press Enter -> advances to Step 2 (Base URL)
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::BaseUrlInput);
+
+    // Test Esc step-back: URL -> Name
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::CustomProviderNameInput);
+
+    // Re-advance to Step 2
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::BaseUrlInput);
+
+    // Step 2: Enter Base URL
+    app.url_modal_input.clear();
+    for c in "https://openrouter.ai/api/v1".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));
+    }
+
+    // Press Enter -> advances to Step 3 (API Key)
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::ApiKeyInput);
+
+    // Test Esc step-back: Key -> URL
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::BaseUrlInput);
+
+    // Re-advance to Step 3
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::ApiKeyInput);
+
+    // Step 3: Enter API Key
+    app.key_modal_input.clear();
+    for c in "sk-or-v1-custom-secret".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));
+    }
+
+    // Press Enter -> completes credentials and advances automatically to Model Catalog
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::SelectModel);
+    assert_eq!(
+        app.config.get_provider_display_name(AiProvider::Custom),
+        "Custom (OpenRouter AI)"
+    );
+    assert_eq!(
+        app.config.get_base_url_for_provider(AiProvider::Custom).as_deref(),
+        Some("https://openrouter.ai/api/v1")
+    );
+    assert_eq!(
+        app.config.get_api_key_for_provider(AiProvider::Custom).as_deref(),
+        Some("sk-or-v1-custom-secret")
+    );
+
+    // Close model modal
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+
+    // =========================================================================
+    // 2. PREDEFINED PROVIDER (e.g. Claude): 2-Step Flow (URL -> Key -> Model)
+    // Omit provider name step automatically!
+    // =========================================================================
+    app.start_provider_setup_flow(AiProvider::AnthropicClaude);
+    assert!(app.show_key_modal);
+    assert_eq!(app.active_modal, ActiveModal::BaseUrlInput); // Directly Step 1 of 2
+
+    // Esc step-back from Step 1 returns to SelectProvider
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::SelectProvider);
+
+    // Restart Claude setup wizard
+    app.start_provider_setup_flow(AiProvider::AnthropicClaude);
+    assert_eq!(app.active_modal, ActiveModal::BaseUrlInput);
+
+    // Enter Base URL -> advances to Step 2 (API Key)
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::ApiKeyInput);
+
+    // Esc step-back from Step 2 returns to Step 1 (Base URL)
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::BaseUrlInput);
+
+    // Advance to Step 2 again and provide key
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::ApiKeyInput);
+    app.key_modal_input = "sk-ant-api03-live-test".to_string();
+
+    // Enter saves and advances to Model Catalog
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::SelectModel);
+    assert_eq!(
+        app.config.get_api_key_for_provider(AiProvider::AnthropicClaude).as_deref(),
+        Some("sk-ant-api03-live-test")
+    );
+
+    // Close model modal
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+
+    // =========================================================================
+    // 3. OLLAMA LOCAL: 1-Step Flow (Base URL -> Model Catalog)
+    // Skips Name step AND skips API Key authentication entirely!
+    // =========================================================================
+    app.start_provider_setup_flow(AiProvider::OllamaLocal);
+    assert!(app.show_key_modal);
+    assert_eq!(app.active_modal, ActiveModal::BaseUrlInput); // Directly Step 1 of 1
+
+    // Enter completes endpoint and advances directly to Model Catalog without asking for API Key
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+    assert_eq!(app.active_modal, ActiveModal::SelectModel);
 }

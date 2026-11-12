@@ -11,8 +11,21 @@ pub enum Severity {
     Info,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+impl Severity {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Severity::Critical => "CRITICAL",
+            Severity::High => "HIGH",
+            Severity::Medium => "MEDIUM",
+            Severity::Low => "LOW",
+            Severity::Info => "INFO",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AgentStatus {
+    #[default]
     Idle,
     Planning,
     WaitingConfirmation,
@@ -292,18 +305,28 @@ pub struct CommandSuggestion {
 pub const AVAILABLE_COMMANDS: &[CommandSuggestion] = &[
     CommandSuggestion {
         name: "/scan",
-        args: "",
+        args: "[--diff-scope=local]",
         description: "Run autonomous security audit on workspace",
+    },
+    CommandSuggestion {
+        name: "/patch",
+        args: "",
+        description: "Apply selected code hardening patch to disk",
+    },
+    CommandSuggestion {
+        name: "/secrets",
+        args: "",
+        description: "Scan & filter hardcoded secrets & high-entropy keys",
     },
     CommandSuggestion {
         name: "/model",
         args: "[name]",
-        description: "Open model selection popup or set model",
+        description: "Select active AI model from current provider's catalog",
     },
     CommandSuggestion {
         name: "/provider",
         args: "[name]",
-        description: "Open supported provider list or switch provider",
+        description: "View providers, model catalogs & API key readiness status",
     },
     CommandSuggestion {
         name: "/custom",
@@ -323,7 +346,7 @@ pub const AVAILABLE_COMMANDS: &[CommandSuggestion] = &[
     CommandSuggestion {
         name: "/config",
         args: "",
-        description: "Open AI provider & model settings popup",
+        description: "Open AI settings dashboard & credentials manager",
     },
     CommandSuggestion {
         name: "/apply",
@@ -338,7 +361,7 @@ pub const AVAILABLE_COMMANDS: &[CommandSuggestion] = &[
     CommandSuggestion {
         name: "/export",
         args: "",
-        description: "Export defense report to HTML & Markdown",
+        description: "Export defense report to JSON & Markdown",
     },
     CommandSuggestion {
         name: "/init-sec",
@@ -354,6 +377,11 @@ pub const AVAILABLE_COMMANDS: &[CommandSuggestion] = &[
         name: "/shield",
         args: "",
         description: "Run Pre-Install Malware Shield audit",
+    },
+    CommandSuggestion {
+        name: "/apk",
+        args: "[path]",
+        description: "Audit AndroidManifest.xml, mobile APK & container configs",
     },
     CommandSuggestion {
         name: "/hotfix",

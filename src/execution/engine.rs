@@ -11,7 +11,7 @@ use crate::subagents::{
     SastAnalyzerAgent, SecretHunterAgent, VerificationAgent,
 };
 use crate::types::{
-    AgentStatus, ChatMessage, DynamicLogEntry, HardeningPatch, VulnerabilityFinding,
+    AgentStatus, AiProvider, ChatMessage, DynamicLogEntry, HardeningPatch, VulnerabilityFinding,
     WorkspaceProfile,
 };
 use std::path::PathBuf;
@@ -30,6 +30,10 @@ pub enum EngineMessage {
     Chat(ChatMessage),
     AwaitingConfirmation,
     ScanFinished,
+    ModelsDiscovered {
+        provider: AiProvider,
+        models: Vec<String>,
+    },
 }
 
 #[allow(dead_code)]

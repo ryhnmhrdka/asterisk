@@ -1,10 +1,11 @@
+use crate::ui::theme::th;
 use crate::types::HardeningPatch;
-use crate::ui::fit::{ellipsize, text_width};
+use crate::ui::fit::ellipsize;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
+    widgets::{Block, BorderType, Paragraph, Wrap},
     Frame,
 };
 
@@ -31,55 +32,66 @@ impl PatchView {
                 Constraint::Min(10),
             ])
             .split(area);
-        let list_inner = (chunks[0].width as usize).saturating_sub(1);
 
         // Left Panel: Patch List
+        let list_block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(th().border))
+            .title(Line::from(vec![
+                Span::styled(" [remediation patches] ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("({} total) ", patches.len()), Style::default().fg(th().text_muted)),
+            ]))
+            .style(Style::default().bg(th().surface));
+
+        let inner_list = list_block.inner(chunks[0]);
+        let list_w = inner_list.width as usize;
+
         let mut list_lines = Vec::new();
         for (i, patch) in patches.iter().enumerate() {
             let is_sel = i == selected_index;
             let status_badge = if patch.applied {
-                Span::styled("● applied", Style::default().fg(Color::Rgb(100, 200, 130)))
+                Span::styled("● applied", Style::default().fg(th().success).add_modifier(Modifier::BOLD))
             } else {
-                Span::styled("● pending", Style::default().fg(Color::Rgb(230, 140, 60)).add_modifier(Modifier::BOLD))
+                Span::styled("● pending", Style::default().fg(th().warning).add_modifier(Modifier::BOLD))
             };
 
             let prefix = if is_sel { "▸ " } else { "  " };
-            let line_style = if is_sel {
-                Style::default().bg(Color::Rgb(28, 30, 40)).fg(Color::White).add_modifier(Modifier::BOLD)
+            let title_style = if is_sel {
+                Style::default().fg(th().fg).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::Rgb(180, 185, 195))
+                Style::default().fg(th().text)
             };
 
-            let head = format!("  {}{}. ● {} ", prefix, i + 1, "");
-            let id_room = list_inner.saturating_sub(text_width(&head) + 1);
             list_lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(format!("{}{}. ", prefix, i + 1), Style::default().fg(Color::Rgb(120, 125, 140))),
-                status_badge,
                 Span::raw(" "),
-                Span::styled(ellipsize(&patch.id, id_room.max(6)), line_style),
+                Span::styled(format!("{}{}. ", prefix, i + 1), Style::default().fg(th().text_muted)),
+                Span::styled(ellipsize(&patch.id, list_w.saturating_sub(18).max(8)), title_style),
+                Span::raw("  "),
+                status_badge,
             ]));
-
-            let test_badge = if patch.unit_test_passed {
-                Span::styled("[✓test]", Style::default().fg(Color::Rgb(110, 210, 140)))
-            } else {
-                Span::styled("[…test]", Style::default().fg(Color::Rgb(150, 155, 170)))
-            };
-            let gate_badge = if patch.safe_outputs_passed {
-                Span::styled("[✓gate]", Style::default().fg(Color::Rgb(120, 195, 250)))
-            } else {
-                Span::styled("[!gate]", Style::default().fg(Color::Rgb(230, 140, 60)))
-            };
 
             let fname = patch.target_file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             list_lines.push(Line::from(vec![
-                Span::raw("        "),
-                Span::styled(ellipsize(&fname, list_inner.saturating_sub(9)), Style::default().fg(Color::Rgb(120, 125, 140))),
+                Span::raw("     "),
+                Span::styled("target: ", Style::default().fg(th().text_dim)),
+                Span::styled(ellipsize(&fname, list_w.saturating_sub(15)), Style::default().fg(th().text_sub)),
             ]));
+
+            let test_badge = if patch.unit_test_passed {
+                Span::styled("✓ test passed", Style::default().fg(th().success))
+            } else {
+                Span::styled("… test pending", Style::default().fg(th().text_muted))
+            };
+            let gate_badge = if patch.safe_outputs_passed {
+                Span::styled("✓ gate verified", Style::default().fg(th().primary))
+            } else {
+                Span::styled("! gate review", Style::default().fg(th().warning))
+            };
+
             list_lines.push(Line::from(vec![
-                Span::raw("        "),
+                Span::raw("     "),
                 test_badge,
-                Span::raw(" "),
+                Span::styled("  •  ", Style::default().fg(th().border)),
                 gate_badge,
             ]));
             list_lines.push(Line::raw(""));
@@ -88,17 +100,12 @@ impl PatchView {
         if patches.is_empty() {
             list_lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(ellipsize("no hardening patches pending.", list_inner.saturating_sub(2)), Style::default().fg(Color::Rgb(120, 125, 140))),
+                Span::styled("no hardening patches pending • codebase is clean or run defense audit.", Style::default().fg(th().text_muted)),
             ]));
         }
 
-        let list_block = Block::default()
-            .borders(Borders::RIGHT)
-            .border_type(BorderType::Plain)
-            .border_style(Style::default().fg(Color::Rgb(28, 29, 36)))
-            .style(Style::default().bg(Color::Rgb(16, 17, 22)));
-
-        f.render_widget(Paragraph::new(list_lines).block(list_block), chunks[0]);
+        f.render_widget(list_block, chunks[0]);
+        f.render_widget(Paragraph::new(list_lines).wrap(Wrap { trim: false }), inner_list);
 
         // Right Panel: Action Buttons + Diff Viewer + Unit Test Viewer
         let right_chunks = Layout::default()
@@ -118,95 +125,105 @@ impl PatchView {
         if patches.is_empty() {
             let empty_text = Line::from(vec![
                 Span::raw("  "),
-                Span::styled(ellipsize("no hardening patches pending  •  codebase is clean or no patches synthesized", action_bar_area.width.saturating_sub(3) as usize), Style::default().fg(Color::Rgb(120, 125, 140))),
+                Span::styled("no hardening patches pending • workspace clean or run defense audit via [space].", Style::default().fg(th().text_muted)),
             ]);
-            f.render_widget(Paragraph::new(empty_text).block(Block::default().style(Style::default().bg(Color::Rgb(14, 15, 19)))), action_bar_area);
+            let empty_block = Block::bordered()
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(th().border))
+                .style(Style::default().bg(th().bg));
+            f.render_widget(Paragraph::new(empty_text).block(empty_block), action_bar_area);
         } else {
-            let bar_w = action_bar_area.width as usize;
-            let (apply_lbl, roll_lbl) = if bar_w >= 2 + 20 + 1 + 16 + 2 + 10 {
-                (" ✓ Apply to Disk ", " ↩ Rollback ")
-            } else {
-                (" ✓ Apply ", " ↩ Undo ")
-            };
-            let apply_w = text_width(apply_lbl) as u16 + 2;
-            let roll_w = text_width(roll_lbl) as u16 + 2;
+            let bar_block = Block::bordered()
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(th().border))
+                .title(Line::from(vec![
+                    Span::styled(" [patch actions] ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                ]))
+                .style(Style::default().bg(th().surface));
+            let inner_action = bar_block.inner(action_bar_area);
+            f.render_widget(bar_block, action_bar_area);
+
+            let apply_lbl = " [a] Apply to Disk ";
+            let roll_lbl = " [r] Rollback ";
+            let apply_w = (apply_lbl.len() as u16).max(18);
+            let roll_w = (roll_lbl.len() as u16).max(14);
+
             let action_split = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
-                    Constraint::Length(2),       // Left margin
+                    Constraint::Length(1),       // Left margin
                     Constraint::Length(apply_w), // Apply button
                     Constraint::Length(1),       // Spacer
                     Constraint::Length(roll_w),  // Rollback button
                     Constraint::Length(2),       // Spacer
-                    Constraint::Min(0),          // Status text
+                    Constraint::Min(0),          // Status/Target info
                 ])
-                .split(action_bar_area);
+                .split(inner_action);
 
             let apply_rect = action_split[1];
             let rollback_rect = action_split[3];
             let msg_rect = action_split[5];
 
-            let apply_block = Block::default()
-                .borders(Borders::NONE)
-                .style(Style::default().bg(Color::Rgb(240, 240, 245)));
-            let apply_text = Line::from(Span::styled(apply_lbl, Style::default().fg(Color::Black).bg(Color::Rgb(240, 240, 245)).add_modifier(Modifier::BOLD)));
-            f.render_widget(Paragraph::new(apply_text).centered().block(apply_block), apply_rect);
+            let apply_text = Line::from(Span::styled(apply_lbl, Style::default().fg(th().on_accent).bg(th().success).add_modifier(Modifier::BOLD)));
+            f.render_widget(Paragraph::new(apply_text).centered(), apply_rect);
 
-            let roll_block = Block::default()
-                .borders(Borders::NONE)
-                .style(Style::default().bg(Color::Rgb(28, 30, 38)));
-            let roll_text = Line::from(Span::styled(roll_lbl, Style::default().fg(Color::Rgb(170, 175, 190)).bg(Color::Rgb(28, 30, 38))));
-            f.render_widget(Paragraph::new(roll_text).centered().block(roll_block), rollback_rect);
+            let roll_text = Line::from(Span::styled(roll_lbl, Style::default().fg(th().fg).bg(th().element_hi).add_modifier(Modifier::BOLD)));
+            f.render_widget(Paragraph::new(roll_text).centered(), rollback_rect);
 
             let status_text = if let Some(msg) = action_msg {
                 Line::from(vec![
-                    Span::styled("status: ", Style::default().fg(Color::Rgb(120, 125, 140))),
-                    Span::styled(ellipsize(msg, msg_rect.width.saturating_sub(8) as usize), Style::default().fg(Color::White)),
+                    Span::styled("status: ", Style::default().fg(th().text_muted)),
+                    Span::styled(msg, Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
+                ])
+            } else if let Some(selected_patch) = patches.get(selected_index) {
+                Line::from(vec![
+                    Span::styled("target: ", Style::default().fg(th().text_muted)),
+                    Span::styled(selected_patch.target_file.display().to_string(), Style::default().fg(th().primary)),
+                    Span::styled("  •  hotkey: [a] apply  •  [r] rollback", Style::default().fg(th().text_muted)),
                 ])
             } else {
                 Line::from(vec![
-                    Span::styled(ellipsize("click buttons or press [Ctrl+A] / [Ctrl+R]", msg_rect.width as usize), Style::default().fg(Color::Rgb(120, 125, 140))),
+                    Span::styled("click buttons or press [a] / [r]", Style::default().fg(th().text_muted)),
                 ])
             };
-            f.render_widget(Paragraph::new(status_text).block(Block::default().style(Style::default().bg(Color::Rgb(14, 15, 19)))), msg_rect);
+            f.render_widget(Paragraph::new(status_text), msg_rect);
 
             btn_apply = Some(apply_rect);
             btn_rollback = Some(rollback_rect);
         }
 
         // Diff Viewer
-        let diff_block = Block::default()
-            .borders(Borders::TOP)
-            .border_type(BorderType::Plain)
-            .border_style(Style::default().fg(Color::Rgb(28, 29, 36)))
-            .style(Style::default().bg(Color::Rgb(14, 15, 19)));
+        let diff_block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(th().border))
+            .title(Line::from(vec![
+                Span::styled(" [unified git diff] ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                if let Some(patch) = patches.get(selected_index) {
+                    Span::styled(format!(":: {} ", patch.target_file.display()), Style::default().fg(th().fg))
+                } else {
+                    Span::raw("")
+                },
+            ]))
+            .style(Style::default().bg(th().bg));
 
         let diff_lines = if let Some(patch) = patches.get(selected_index) {
             let mut lines = Vec::new();
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(" file: ", Style::default().fg(Color::Rgb(140, 145, 160)).bg(Color::Rgb(24, 25, 32))),
-                Span::raw("  "),
-                Span::styled(patch.target_file.display().to_string(), Style::default().fg(Color::White)),
+                Span::styled("● REMEDIATION INTENT: ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                Span::styled(&patch.explanation, Style::default().fg(th().text)),
             ]));
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(" diff: ", Style::default().fg(Color::Rgb(140, 145, 160)).bg(Color::Rgb(24, 25, 32))),
-                Span::raw("  "),
-                Span::styled(&patch.explanation, Style::default().fg(Color::Rgb(170, 175, 190))),
-            ]));
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(" gate: ", Style::default().fg(Color::Rgb(140, 145, 160)).bg(Color::Rgb(24, 25, 32))),
-                Span::raw("  "),
+                Span::styled("● SAFETY GATES:       ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
                 Span::styled(
                     if patch.unit_test_passed { "✓ Worktree Unit Test Passed" } else { "… Worktree Unit Test Pending" },
-                    Style::default().fg(if patch.unit_test_passed { Color::Rgb(120, 220, 140) } else { Color::Rgb(170, 175, 190) }),
+                    Style::default().fg(if patch.unit_test_passed { th().success } else { th().text_sub }),
                 ),
                 Span::raw("  •  "),
                 Span::styled(
                     if patch.safe_outputs_passed { "✓ Safe Outputs Verified" } else { "! Safe Outputs Unverified" },
-                    Style::default().fg(if patch.safe_outputs_passed { Color::Rgb(140, 200, 255) } else { Color::Rgb(230, 140, 60) }),
+                    Style::default().fg(if patch.safe_outputs_passed { th().primary } else { th().warning }),
                 ),
             ]));
             lines.push(Line::raw(""));
@@ -214,53 +231,63 @@ impl PatchView {
             for line in patch.unified_diff.lines() {
                 let prefix_span = Span::raw("  ");
                 if line.starts_with('+') && !line.starts_with("+++") {
-                    lines.push(Line::from(vec![prefix_span, Span::styled(line, Style::default().fg(Color::Rgb(120, 220, 140)).add_modifier(Modifier::BOLD))]));
+                    lines.push(Line::from(vec![prefix_span, Span::styled(line, Style::default().fg(th().success).add_modifier(Modifier::BOLD))]));
                 } else if line.starts_with('-') && !line.starts_with("---") {
-                    lines.push(Line::from(vec![prefix_span, Span::styled(line, Style::default().fg(Color::Rgb(230, 100, 100)))]));
+                    lines.push(Line::from(vec![prefix_span, Span::styled(line, Style::default().fg(th().destructive))]));
                 } else if line.starts_with("---") || line.starts_with("+++") {
-                    lines.push(Line::from(vec![prefix_span, Span::styled(line, Style::default().fg(Color::Rgb(120, 125, 140)))]));
+                    lines.push(Line::from(vec![prefix_span, Span::styled(line, Style::default().fg(th().text_muted))]));
+                } else if line.starts_with("@@") {
+                    lines.push(Line::from(vec![prefix_span, Span::styled(line, Style::default().fg(th().primary))]));
                 } else {
-                    lines.push(Line::from(vec![prefix_span, Span::styled(line, Style::default().fg(Color::Rgb(150, 155, 170)))]));
+                    lines.push(Line::from(vec![prefix_span, Span::styled(line, Style::default().fg(th().text_sub))]));
                 }
             }
             lines
         } else {
             vec![Line::from(vec![
                 Span::raw("  "),
-                Span::styled("no remediation patches available • workspace clean or run defense audit.", Style::default().fg(Color::Rgb(120, 125, 140))),
+                Span::styled("no remediation patches available • workspace clean or run defense audit.", Style::default().fg(th().text_muted)),
             ])]
         };
 
-        f.render_widget(Paragraph::new(diff_lines).wrap(Wrap { trim: false }).block(diff_block), right_chunks[1]);
+        let inner_diff = diff_block.inner(right_chunks[1]);
+        f.render_widget(diff_block, right_chunks[1]);
+        f.render_widget(Paragraph::new(diff_lines).wrap(Wrap { trim: false }), inner_diff);
 
         // Automated Unit Test Code Block
-        let test_block = Block::default()
-            .borders(Borders::TOP)
-            .border_type(BorderType::Plain)
-            .border_style(Style::default().fg(Color::Rgb(28, 29, 36)))
-            .style(Style::default().bg(Color::Rgb(12, 13, 16)));
+        let test_block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(th().border))
+            .title(Line::from(vec![
+                Span::styled(" [security verification unit test] ", Style::default().fg(th().success).add_modifier(Modifier::BOLD)),
+                Span::styled(":: isolated worktree sandbox ", Style::default().fg(th().text_muted)),
+            ]))
+            .style(Style::default().bg(th().bg_alt));
 
         let test_lines = if let Some(patch) = patches.get(selected_index) {
             let mut lines = Vec::new();
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled("// automated security verification unit test", Style::default().fg(Color::Rgb(100, 105, 120))),
+                Span::styled("// automated security verification unit test (worktree sandbox validated)", Style::default().fg(th().text_dim)),
             ]));
+            lines.push(Line::raw(""));
             for l in patch.unit_test_code.lines() {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
-                    Span::styled(l, Style::default().fg(Color::Rgb(180, 185, 200))),
+                    Span::styled(l, Style::default().fg(th().text)),
                 ]));
             }
             lines
         } else {
             vec![Line::from(vec![
                 Span::raw("  "),
-                Span::styled("no remediation test harness • workspace clean or run defense audit.", Style::default().fg(Color::Rgb(120, 125, 140))),
+                Span::styled("no remediation test harness • workspace clean or run defense audit.", Style::default().fg(th().text_muted)),
             ])]
         };
 
-        f.render_widget(Paragraph::new(test_lines).wrap(Wrap { trim: false }).block(test_block), right_chunks[2]);
+        let inner_test = test_block.inner(right_chunks[2]);
+        f.render_widget(test_block, right_chunks[2]);
+        f.render_widget(Paragraph::new(test_lines).wrap(Wrap { trim: false }), inner_test);
 
         PatchClickTargets {
             list_area: chunks[0],

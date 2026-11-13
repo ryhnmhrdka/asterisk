@@ -5,6 +5,7 @@ pub mod modal_view;
 pub mod patch_view;
 pub mod sidebar_view;
 pub mod skills_view;
+pub mod theme_picker_view;
 pub mod welcome_view;
 
 pub use graph_view::GraphView;
@@ -14,5 +15,6 @@ pub use modal_view::{ModalClickTargets, ModalView};
 pub use patch_view::{PatchClickTargets, PatchView};
 pub use sidebar_view::{SidebarClickTargets, SidebarView};
 pub use skills_view::SkillsView;
+pub use theme_picker_view::{ThemePickerTargets, ThemePickerView};
 #[allow(unused_imports)]
 pub use welcome_view::WelcomeView;

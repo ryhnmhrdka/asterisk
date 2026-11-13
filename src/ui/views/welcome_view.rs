@@ -1,9 +1,10 @@
 #![allow(dead_code)]
+use crate::ui::theme::th;
 
 use crate::types::AiProvider;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Clear, Paragraph, Wrap},
     Frame,
@@ -24,7 +25,7 @@ impl WelcomeView {
         active_provider: AiProvider,
     ) -> WelcomeClickTargets {
         // Pure sleek deep black background
-        let bg_block = Block::default().style(Style::default().bg(Color::Rgb(10, 10, 10)));
+        let bg_block = Block::default().style(Style::default().bg(th().bg_alt));
         f.render_widget(bg_block, area);
 
         // Vertical split: Top spacer, ASCII title, spacing, prompt box, helper hint, bottom spacer, footer bar
@@ -54,7 +55,7 @@ impl WelcomeView {
             .map(|l| {
                 Line::from(Span::styled(
                     *l,
-                    Style::default().fg(Color::Rgb(240, 240, 240)).add_modifier(Modifier::BOLD),
+                    Style::default().fg(th().text).add_modifier(Modifier::BOLD),
                 ))
             })
             .collect();
@@ -76,7 +77,7 @@ impl WelcomeView {
 
         // Background of prompt box (#1a1a1c, rounded padding feel)
         f.render_widget(Clear, prompt_box_rect);
-        let box_bg = Block::default().style(Style::default().bg(Color::Rgb(24, 24, 27)));
+        let box_bg = Block::default().style(Style::default().bg(th().element));
         f.render_widget(box_bg, prompt_box_rect);
 
         // Render input text or placeholder
@@ -86,7 +87,7 @@ impl WelcomeView {
                 Span::raw("  "),
                 Span::styled(
                     "Ask anything... \"Audit repository or binary for security vulnerabilities\"",
-                    Style::default().fg(Color::Rgb(110, 110, 115)).bg(Color::Rgb(24, 24, 27)),
+                    Style::default().fg(th().text_dim).bg(th().element),
                 ),
             ]);
             let p = Paragraph::new(vec![Line::raw(""), placeholder_line])
@@ -108,16 +109,16 @@ impl WelcomeView {
                         Span::raw("  "),
                         Span::styled(
                             line_str,
-                            Style::default().fg(Color::White).bg(Color::Rgb(24, 24, 27)).add_modifier(Modifier::BOLD),
+                            Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD),
                         ),
-                        Span::styled("█", Style::default().fg(Color::White).bg(Color::Rgb(24, 24, 27))),
+                        Span::styled("█", Style::default().fg(th().fg).bg(th().element)),
                     ]));
                 } else {
                     lines.push(Line::from(vec![
                         Span::raw("  "),
                         Span::styled(
                             line_str,
-                            Style::default().fg(Color::White).bg(Color::Rgb(24, 24, 27)).add_modifier(Modifier::BOLD),
+                            Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD),
                         ),
                     ]));
                 }
@@ -146,13 +147,13 @@ impl WelcomeView {
             .split(v_chunks[4]);
 
         let hint_line = Line::from(vec![
-            Span::styled("tab", Style::default().fg(Color::Rgb(180, 180, 185)).add_modifier(Modifier::BOLD)),
-            Span::styled(" provider: ", Style::default().fg(Color::Rgb(100, 100, 105))),
-            Span::styled(active_provider.name(), Style::default().fg(Color::Rgb(140, 190, 255))),
-            Span::styled("   ctrl+p", Style::default().fg(Color::Rgb(180, 180, 185)).add_modifier(Modifier::BOLD)),
-            Span::styled(" commands   ", Style::default().fg(Color::Rgb(100, 100, 105))),
-            Span::styled("enter", Style::default().fg(Color::Rgb(180, 180, 185)).add_modifier(Modifier::BOLD)),
-            Span::styled(" execute", Style::default().fg(Color::Rgb(100, 100, 105))),
+            Span::styled("tab", Style::default().fg(th().text_sub).add_modifier(Modifier::BOLD)),
+            Span::styled(" provider: ", Style::default().fg(th().text_dim)),
+            Span::styled(active_provider.name(), Style::default().fg(th().primary)),
+            Span::styled("   ctrl+p", Style::default().fg(th().text_sub).add_modifier(Modifier::BOLD)),
+            Span::styled(" commands   ", Style::default().fg(th().text_dim)),
+            Span::styled("enter", Style::default().fg(th().text_sub).add_modifier(Modifier::BOLD)),
+            Span::styled(" execute", Style::default().fg(th().text_dim)),
         ]);
         f.render_widget(Paragraph::new(hint_line).alignment(Alignment::Right), hint_chunks[1]);
 
@@ -174,7 +175,7 @@ impl WelcomeView {
         f.render_widget(
             Paragraph::new(Span::styled(
                 format!(" target: {dir_display}"),
-                Style::default().fg(Color::Rgb(100, 100, 105)),
+                Style::default().fg(th().text_dim),
             )),
             bottom_chunks[0],
         );
@@ -182,7 +183,7 @@ impl WelcomeView {
         f.render_widget(
             Paragraph::new(Span::styled(
                 "v0.1.0 │ production ",
-                Style::default().fg(Color::Rgb(100, 100, 105)),
+                Style::default().fg(th().text_dim),
             ))
             .alignment(Alignment::Right),
             bottom_chunks[1],

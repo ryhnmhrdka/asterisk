@@ -1,3 +1,4 @@
+use crate::ui::theme::th;
 use crate::execution::{EngineCommand, EngineMessage, ExecutionEngine};
 use crate::orchestrator::{AgentGraphBuilder, DefensePlan, WorkspaceScanner};
 use crate::skills::SkillRegistry;
@@ -22,7 +23,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use rataflow::{Flow, FlowEvent, StepEdge};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Paragraph},
     Frame,
@@ -50,6 +51,7 @@ pub enum ActiveModal {
     BaseUrlInput,
     ApiKeyInput,
     ConfigDashboard,
+    SelectTheme,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +71,8 @@ pub struct AppClickTargets {
     pub findings_table: Option<Rect>,
     pub patches: Option<PatchClickTargets>,
     pub modal: Option<ModalClickTargets>,
+    pub skills_search_bar: Option<Rect>,
+    pub theme_picker: Option<crate::ui::views::ThemePickerTargets>,
 }
 
 pub struct App {
@@ -129,6 +133,11 @@ pub struct App {
     pub previous_modal: Option<ActiveModal>,
     pub model_search_query: String,
     pub model_filtered_items: Vec<(AiProvider, String, bool)>,
+    pub skills_search: String,
+    pub skills_search_active: bool,
+    pub selected_skill_index: usize,
+    pub theme_picker_index: usize,
+    pub theme_before_picker: String,
 }
 
 impl App {
@@ -141,6 +150,9 @@ impl App {
         let flow = Flow::new();
         let skills = SkillRegistry::new();
         let config = AppConfig::load();
+        if let Some(name) = config.theme.as_deref() {
+            crate::ui::theme::set_theme(name);
+        }
         let active_provider = config.provider;
         let checkpoint = WorktreeSandbox::capture_checkpoint(&initial_target).ok();
 
@@ -195,6 +207,11 @@ impl App {
             previous_modal: None,
             model_search_query: String::new(),
             model_filtered_items: Vec::new(),
+            skills_search: String::new(),
+            skills_search_active: false,
+            selected_skill_index: 0,
+            theme_picker_index: 0,
+            theme_before_picker: String::new(),
         }
     }
 
@@ -624,6 +641,74 @@ impl App {
         res || self.should_quit
     }
 
+    /// Opens the interactive theme picker (live preview, revert on Esc).
+    pub fn open_theme_modal(&mut self) {
+        let current = crate::ui::theme::th().name;
+        self.theme_before_picker = current.to_string();
+        self.theme_picker_index = crate::ui::theme::presets()
+            .iter()
+            .position(|t| t.name == current)
+            .unwrap_or(0);
+        self.show_key_modal = true;
+        self.active_modal = ActiveModal::SelectTheme;
+    }
+
+    /// Moves the picker cursor and previews that theme immediately.
+    fn theme_picker_select(&mut self, idx: usize) {
+        let list = crate::ui::theme::presets();
+        if list.is_empty() {
+            return;
+        }
+        self.theme_picker_index = idx.min(list.len() - 1);
+        crate::ui::theme::set_theme(list[self.theme_picker_index].name);
+    }
+
+    fn theme_picker_apply(&mut self) {
+        let list = crate::ui::theme::presets();
+        if let Some(t) = list.get(self.theme_picker_index) {
+            crate::ui::theme::set_theme(t.name);
+            self.persist_theme(t);
+        }
+        self.show_key_modal = false;
+        self.active_modal = ActiveModal::None;
+    }
+
+    fn theme_picker_cancel(&mut self) {
+        let prev = std::mem::take(&mut self.theme_before_picker);
+        crate::ui::theme::set_theme(&prev);
+        self.show_key_modal = false;
+        self.active_modal = ActiveModal::None;
+        self.action_msg = Some(format!("theme unchanged ({prev})"));
+    }
+
+    fn handle_theme_key(&mut self, key: KeyEvent) -> bool {
+        let n = crate::ui::theme::presets().len();
+        let i = self.theme_picker_index;
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.theme_picker_cancel(),
+            KeyCode::Enter | KeyCode::Char(' ') => self.theme_picker_apply(),
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => self.theme_picker_select(if i == 0 { n - 1 } else { i - 1 }),
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => self.theme_picker_select((i + 1) % n),
+            KeyCode::Home | KeyCode::Char('g') => self.theme_picker_select(0),
+            KeyCode::End | KeyCode::Char('G') => self.theme_picker_select(n - 1),
+            KeyCode::Char(c @ '1'..='9') => {
+                let idx = (c as usize) - ('1' as usize);
+                if idx < n {
+                    self.theme_picker_select(idx);
+                }
+            }
+            _ => {}
+        }
+        false
+    }
+
+    /// Saves the active theme to config and reports it in the status line.
+    pub fn persist_theme(&mut self, theme: &'static crate::ui::theme::Theme) {
+        self.config.theme = Some(theme.name.to_string());
+        let _ = self.config.save();
+        self.action_msg = Some(format!("theme → {} ({})  ·  [Ctrl+T] next", theme.label, theme.name));
+    }
+
     pub fn save_key_modal(&mut self) -> bool {
         let k = self.key_modal_input.trim();
         if k.is_empty() && self.active_provider.requires_api_key() && self.active_provider != AiProvider::Custom {
@@ -755,6 +840,10 @@ impl App {
                 self.active_modal = ActiveModal::None;
                 true
             }
+            ActiveModal::SelectTheme => {
+                self.theme_picker_apply();
+                true
+            }
             ActiveModal::None => {
                 self.show_key_modal = false;
                 true
@@ -771,6 +860,7 @@ impl App {
             ActiveModal::ApiKeyInput => self.handle_key_input_key(key),
             ActiveModal::BaseUrlInput => self.handle_url_input_key(key),
             ActiveModal::ConfigDashboard => self.handle_config_dashboard_key(key),
+            ActiveModal::SelectTheme => self.handle_theme_key(key),
             ActiveModal::None => {
                 self.show_key_modal = false;
                 false
@@ -1096,6 +1186,47 @@ impl App {
             return true;
         }
 
+        if self.skills_search_active {
+            match key.code {
+                KeyCode::Esc => {
+                    self.skills_search.clear();
+                    self.skills_search_active = false;
+                    return false;
+                }
+                KeyCode::Enter => {
+                    self.skills_search_active = false;
+                    return false;
+                }
+                KeyCode::Backspace => {
+                    self.skills_search.pop();
+                    return false;
+                }
+                KeyCode::Up => {
+                    if self.selected_skill_index > 0 {
+                        self.selected_skill_index -= 1;
+                    }
+                    return false;
+                }
+                KeyCode::Down => {
+                    self.selected_skill_index += 1;
+                    return false;
+                }
+                KeyCode::Tab => {
+                    self.skills_search_active = false;
+                    self.current_tab = (self.current_tab + 1) % 5;
+                    return false;
+                }
+                KeyCode::Char(c)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    self.skills_search.push(c);
+                    return false;
+                }
+                _ => return false,
+            }
+        }
+
         let suggestions = get_matching_commands(&self.prompt_input);
         let has_suggestions = !suggestions.is_empty();
 
@@ -1189,6 +1320,11 @@ impl App {
                     self.last_esc_press = Some(std::time::Instant::now());
                 }
 
+                if self.current_tab == 4 && !self.skills_search.is_empty() {
+                    self.skills_search.clear();
+                    return false;
+                }
+
                 if !self.prompt_input.is_empty() {
                     self.prompt_input.clear();
                     self.suggestion_index = 0;
@@ -1210,6 +1346,14 @@ impl App {
             }
 
             KeyCode::Enter => {
+                if self.current_tab == 4 && self.prompt_input.is_empty() {
+                    if let Some(skill) = self.skills.skills.get_mut(self.selected_skill_index) {
+                        skill.active = !skill.active;
+                        let status_str = if skill.active { "activated" } else { "disabled" };
+                        self.action_msg = Some(format!("skill '{}' {}", skill.id, status_str));
+                        return false;
+                    }
+                }
                 return self.submit_prompt_input();
             }
             KeyCode::Backspace => {
@@ -1231,11 +1375,22 @@ impl App {
                     self.rollback_current_patch();
                 }
             }
+            KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let t = crate::ui::theme::cycle_theme();
+                self.persist_theme(t);
+            }
             KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.export_security_report();
             }
             KeyCode::Char(' ') if self.prompt_input.is_empty() => {
-                if !self.config.is_api_key_configured() {
+                if self.current_tab == 4 {
+                    if let Some(skill) = self.skills.skills.get_mut(self.selected_skill_index) {
+                        skill.active = !skill.active;
+                        let status_str = if skill.active { "activated" } else { "disabled" };
+                        self.action_msg = Some(format!("skill '{}' {}", skill.id, status_str));
+                        return false;
+                    }
+                } else if !self.config.is_api_key_configured() {
                     // Non-intrusive: no popup on a casual Space press, just a hint.
                     self.action_msg = Some(format!(
                         "no API key for {} — type /provider (or /key) to set one, or use Ollama for offline audit.",
@@ -1250,6 +1405,8 @@ impl App {
                     self.selected_matrix_row -= 1;
                 } else if self.current_tab == 2 && self.selected_patch_row > 0 {
                     self.selected_patch_row -= 1;
+                } else if self.current_tab == 4 && self.selected_skill_index > 0 {
+                    self.selected_skill_index -= 1;
                 }
             }
             KeyCode::Down => {
@@ -1257,7 +1414,13 @@ impl App {
                     self.selected_matrix_row += 1;
                 } else if self.current_tab == 2 && self.selected_patch_row + 1 < self.patches.len() {
                     self.selected_patch_row += 1;
+                } else if self.current_tab == 4 && self.selected_skill_index + 1 < self.skills.skills.len() {
+                    self.selected_skill_index += 1;
                 }
+            }
+            KeyCode::Char('/') if self.current_tab == 4 && self.prompt_input.is_empty() => {
+                self.skills_search_active = true;
+                return false;
             }
             KeyCode::Char(c)
                 if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) =>
@@ -1323,6 +1486,7 @@ impl App {
                            | `/apply` | Apply selected hardening patch to source code |\n\
                            | `/rollback` | Rollback previously applied hardening patch |\n\
                            | `/export` | Export defense audit report to JSON & Markdown |\n\
+                           | `/theme [name]` | Open interactive theme picker, or switch directly (`[Ctrl+T]` cycles) |\n\
                            | `/pause` | Pause / resume selected agent node in workflow |\n\
                            | `/clear` | Clear chat message history |\n\
                            | `/help` | Display this command reference |\n\
@@ -1330,7 +1494,7 @@ impl App {
                            **Keyboard Shortcuts:**\n\
                            - `[Alt+1]`..`[Alt+5]` / `[F1]`..`[F5]` / `[Tab]`: Switch tabs (Flow, Findings, Patches, Execution, Skills)\n\
                            - `[Space]` (empty prompt): Run security audit\n\
-                           - `[Ctrl+A]`: Apply patch │ `[Ctrl+R]`: Rollback patch │ `[Ctrl+P]`: Pause node │ `[Ctrl+E]`: Export report (plain letters always type into the prompt)\n\
+                           - `[Ctrl+A]`: Apply patch │ `[Ctrl+R]`: Rollback patch │ `[Ctrl+P]`: Pause node │ `[Ctrl+E]`: Export report │ `[Ctrl+T]`: Cycle theme (plain letters always type into the prompt)\n\
                            - `[↑/↓]`: Navigate list / suggestions │ `[Tab]`: Autocomplete command │ `[Esc]`: Clear / Cancel │ `[Esc+Esc]`: Rewind Checkpoint".to_string(),
                 });
             } else if input == "/model" || input == "model" {
@@ -1352,6 +1516,18 @@ impl App {
                     self.config.model = Some(model.clone());
                     let _ = self.config.save();
                     self.action_msg = Some(format!("model configured: {model}"));
+                }
+            } else if input == "/theme" || input.starts_with("/theme ") {
+                let arg = input.strip_prefix("/theme").unwrap_or("").trim();
+                if arg.is_empty() || arg == "list" {
+                    self.open_theme_modal();
+                } else if arg == "next" {
+                    let t = crate::ui::theme::cycle_theme();
+                    self.persist_theme(t);
+                } else if let Some(t) = crate::ui::theme::set_theme(arg) {
+                    self.persist_theme(t);
+                } else {
+                    self.action_msg = Some(format!("unknown theme '{arg}' — type /theme to list presets"));
                 }
             } else if input == "/pause" || input == "pause" {
                 self.toggle_pause_selected_node();
@@ -1722,6 +1898,35 @@ impl App {
         let row = mouse.row;
         let is_left_click = matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left));
 
+        if self.show_key_modal && self.active_modal == ActiveModal::SelectTheme {
+            let Some(t) = self.click_targets.theme_picker.clone() else { return };
+            let n = crate::ui::theme::presets().len();
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    let i = self.theme_picker_index;
+                    self.theme_picker_select(if i == 0 { n - 1 } else { i - 1 });
+                }
+                MouseEventKind::ScrollDown => self.theme_picker_select((self.theme_picker_index + 1) % n),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if t.btn_apply.is_some_and(|r| in_rect(r, col, row)) {
+                        self.theme_picker_apply();
+                    } else if t.btn_cancel.is_some_and(|r| in_rect(r, col, row)) {
+                        self.theme_picker_cancel();
+                    } else if let Some((idx, _)) = t.rows.iter().find(|(_, r)| in_rect(*r, col, row)) {
+                        if *idx == self.theme_picker_index {
+                            self.theme_picker_apply();
+                        } else {
+                            self.theme_picker_select(*idx);
+                        }
+                    } else if !in_rect(t.modal_rect, col, row) {
+                        self.theme_picker_cancel();
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
         if self.show_key_modal {
             if is_left_click {
                 if let Some(modal_targets) = &self.click_targets.modal {
@@ -1948,6 +2153,16 @@ impl App {
                     }
                 }
             }
+
+            // E. Tab 4: Skills View click
+            if self.current_tab == 4 {
+                if let Some(search_rect) = self.click_targets.skills_search_bar {
+                    if in_rect(search_rect, col, row) {
+                        self.skills_search_active = true;
+                        return;
+                    }
+                }
+            }
         }
 
         // E. Forward Mouse to Rataflow Canvas on Tab 0 (Node drag, node click, pan, zoom)
@@ -1970,6 +2185,12 @@ impl App {
 
         if self.show_key_modal {
             let modal_targets = match self.active_modal {
+                ActiveModal::SelectTheme => {
+                    let saved = self.config.theme.clone().unwrap_or_else(|| "default_dark".to_string());
+                    let t = crate::ui::views::ThemePickerView::render(f, area, self.theme_picker_index, &saved);
+                    self.click_targets.theme_picker = Some(t);
+                    ModalClickTargets::default()
+                }
                 ActiveModal::SelectProvider => {
                     ModalView::render_provider_list(
                         f,
@@ -2072,7 +2293,7 @@ impl App {
 
     fn render_workspace(&mut self, f: &mut Frame, area: Rect) {
         // Deep obsidian background fill
-        f.render_widget(Block::default().style(Style::default().bg(Color::Rgb(12, 13, 16))), area);
+        f.render_widget(Block::default().style(Style::default().bg(th().bg_alt)), area);
 
         let root_chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -2084,22 +2305,22 @@ impl App {
             .split(area);
 
         // Top Header Bar with sleek surface fill
-        let header_block = Block::default().style(Style::default().bg(Color::Rgb(18, 19, 24)));
+        let header_block = Block::default().style(Style::default().bg(th().surface));
         f.render_widget(header_block, root_chunks[0]);
 
         let status_badge = if self.awaiting_confirmation {
-            Span::styled(" ● awaiting confirmation ", Style::default().fg(Color::Rgb(255, 200, 100)).bg(Color::Rgb(36, 30, 20)).add_modifier(Modifier::BOLD))
+            Span::styled(" ● awaiting confirmation ", Style::default().fg(th().warning).bg(th().element).add_modifier(Modifier::BOLD))
         } else if self.is_running {
-            Span::styled(" ● scanning ", Style::default().fg(Color::Rgb(140, 200, 255)).bg(Color::Rgb(20, 28, 40)).add_modifier(Modifier::BOLD))
+            Span::styled(" ● scanning ", Style::default().fg(th().primary).bg(th().element).add_modifier(Modifier::BOLD))
         } else {
-            Span::styled(" ● ready ", Style::default().fg(Color::Rgb(150, 220, 150)).bg(Color::Rgb(20, 30, 22)))
+            Span::styled(" ● ready ", Style::default().fg(th().success).bg(th().element))
         };
 
         let unpatched_count = self.findings.iter().filter(|x| !x.patched).count();
         let findings_pill = if unpatched_count > 0 {
-            Span::styled(format!(" {unpatched_count} unresolved "), Style::default().fg(Color::Rgb(255, 140, 140)).bg(Color::Rgb(40, 22, 26)).add_modifier(Modifier::BOLD))
+            Span::styled(format!(" {unpatched_count} unresolved "), Style::default().fg(th().destructive).bg(th().element).add_modifier(Modifier::BOLD))
         } else {
-            Span::styled(" 0 findings ", Style::default().fg(Color::Rgb(150, 152, 160)).bg(Color::Rgb(26, 27, 33)))
+            Span::styled(" 0 findings ", Style::default().fg(th().text_muted).bg(th().element))
         };
 
         // Adaptive header: path takes whatever room is left; low-priority pills drop first.
@@ -2127,22 +2348,22 @@ impl App {
 
         let mut header_spans = vec![
             Span::raw(" "),
-            Span::styled(" asterisk ", Style::default().fg(Color::White).bg(Color::Rgb(28, 29, 36)).add_modifier(Modifier::BOLD)),
+            Span::styled(" asterisk ", Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD)),
             Span::raw("  "),
-            Span::styled(format!(" {dir_txt} "), Style::default().fg(Color::Rgb(170, 172, 180)).bg(Color::Rgb(24, 25, 31))),
+            Span::styled(format!(" {dir_txt} "), Style::default().fg(th().text_sub).bg(th().element)),
         ];
         if show_files {
             header_spans.push(Span::raw("  "));
-            header_spans.push(Span::styled(files_txt, Style::default().fg(Color::Rgb(150, 152, 160)).bg(Color::Rgb(24, 25, 31))));
+            header_spans.push(Span::styled(files_txt, Style::default().fg(th().text_muted).bg(th().element)));
         }
         header_spans.push(Span::raw("  "));
         header_spans.push(findings_pill);
         if show_patches {
             header_spans.push(Span::raw("  "));
-            header_spans.push(Span::styled(patches_txt, Style::default().fg(Color::Rgb(150, 152, 160)).bg(Color::Rgb(24, 25, 31))));
+            header_spans.push(Span::styled(patches_txt, Style::default().fg(th().text_muted).bg(th().element)));
         }
         header_spans.push(Span::raw("  "));
-        header_spans.push(Span::styled(prov_txt, Style::default().fg(Color::Rgb(160, 200, 255)).bg(Color::Rgb(22, 28, 40))));
+        header_spans.push(Span::styled(prov_txt, Style::default().fg(th().primary).bg(th().element)));
         header_spans.push(Span::raw("  "));
         header_spans.push(status_badge);
         let top_header = Line::from(header_spans);
@@ -2190,7 +2411,7 @@ impl App {
 
         // Modern Tab Bar surface
         let tab_bar_area = right_chunks[1];
-        f.render_widget(Block::default().style(Style::default().bg(Color::Rgb(14, 15, 19))), tab_bar_area);
+        f.render_widget(Block::default().style(Style::default().bg(th().bg)), tab_bar_area);
 
         let findings_count = self.findings.len();
         let patches_count = self.patches.len();
@@ -2222,13 +2443,13 @@ impl App {
 
             let pill_style = if is_selected {
                 Style::default()
-                    .fg(Color::White)
-                    .bg(Color::Rgb(40, 42, 54))
+                    .fg(th().fg)
+                    .bg(th().element_hi)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
-                    .fg(Color::Rgb(140, 142, 152))
-                    .bg(Color::Rgb(20, 21, 27))
+                    .fg(th().text_muted)
+                    .bg(th().surface)
             };
 
             tab_rects.push((
@@ -2244,7 +2465,7 @@ impl App {
         self.click_targets.tab_rects = tab_rects;
 
         let tab_bar_widget = Paragraph::new(Line::from(tab_spans))
-            .block(Block::default().style(Style::default().bg(Color::Rgb(14, 15, 19))));
+            .block(Block::default().style(Style::default().bg(th().bg)));
         f.render_widget(tab_bar_widget, tab_bar_area);
 
         let content_area = right_chunks[3];
@@ -2259,16 +2480,26 @@ impl App {
                 self.click_targets.patches = Some(patch_targets);
             }
             3 => LogsView::render(f, content_area, &self.logs, 0),
-            4 => SkillsView::render(f, content_area, &self.skills.skills),
+            4 => {
+                let search_rect = SkillsView::render(
+                    f,
+                    content_area,
+                    &self.skills.skills,
+                    &self.skills_search,
+                    self.skills_search_active,
+                    self.selected_skill_index,
+                );
+                self.click_targets.skills_search_bar = Some(search_rect);
+            }
             _ => {}
         }
 
         // Bottom Footer Bar (Sleek surface fill, no ASCII pipe spam)
-        let footer_block = Block::default().style(Style::default().bg(Color::Rgb(14, 15, 19)));
+        let footer_block = Block::default().style(Style::default().bg(th().bg));
         f.render_widget(footer_block, root_chunks[2]);
 
-        let fkey = Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36));
-        let flab = Style::default().fg(Color::Rgb(120, 122, 132));
+        let fkey = Style::default().fg(th().fg).bg(th().element);
+        let flab = Style::default().fg(th().text_muted);
         let footer = if self.patches.is_empty() {
             crate::ui::fit::hint_line(
                 &[("[Space]", "audit"), ("[Tab]", "views"), ("[/config]", "settings"), ("[Esc]", "quit")],

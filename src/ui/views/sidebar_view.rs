@@ -1,9 +1,10 @@
+use crate::ui::theme::th;
 use crate::types::{get_matching_commands, AgentStatus, ChatMessage, SproutedNodeInfo};
 use crate::ui::fit::{ellipsize, hint_line};
 use crate::ui::markdown::parse_markdown;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
     Frame,
@@ -43,16 +44,16 @@ impl SidebarView {
             if awaiting_confirmation {
                 vec![
                     Line::from(vec![
-                        Span::styled(" > ", Style::default().fg(Color::Rgb(255, 200, 100)).add_modifier(Modifier::BOLD)),
-                        Span::styled("click [Execute] or type 'y'... ", Style::default().fg(Color::Rgb(110, 112, 120))),
+                        Span::styled(" > ", Style::default().fg(th().warning).add_modifier(Modifier::BOLD)),
+                        Span::styled("click [Execute] or type 'y'... ", Style::default().fg(th().text_dim)),
                     ]),
                     Line::raw(""),
                 ]
             } else {
                 vec![
                     Line::from(vec![
-                        Span::styled(" > ", Style::default().fg(Color::Rgb(160, 200, 255)).add_modifier(Modifier::BOLD)),
-                        Span::styled("type instructions or slash commands... ", Style::default().fg(Color::Rgb(100, 102, 112))),
+                        Span::styled(" > ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                        Span::styled("type instructions or slash commands... ", Style::default().fg(th().text_dim)),
                     ]),
                     Line::raw(""),
                 ]
@@ -65,11 +66,11 @@ impl SidebarView {
                 let is_last = i == total_wrapped - 1;
                 let prefix = if i == 0 { " > " } else { "   " };
                 let mut spans = vec![
-                    Span::styled(prefix, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(line_text.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Span::styled(prefix, Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
+                    Span::styled(line_text.clone(), Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
                 ];
                 if is_last {
-                    spans.push(Span::styled("█", Style::default().fg(Color::White)));
+                    spans.push(Span::styled("█", Style::default().fg(th().fg)));
                 }
                 lines.push(Line::from(spans));
             }
@@ -107,13 +108,13 @@ impl SidebarView {
         let sidebar_bg = Block::default()
             .borders(Borders::RIGHT)
             .border_type(BorderType::Plain)
-            .border_style(Style::default().fg(Color::Rgb(28, 29, 36)))
-            .style(Style::default().bg(Color::Rgb(16, 17, 21)));
+            .border_style(Style::default().fg(th().element))
+            .style(Style::default().bg(th().surface));
         f.render_widget(sidebar_bg, area);
 
         // 1. Chat Message Stream (Clean filled surface, NO borders)
         let chat_block = Block::default()
-            .style(Style::default().bg(Color::Rgb(16, 17, 21)));
+            .style(Style::default().bg(th().surface));
 
         let max_text_width = (chunks[0].width.saturating_sub(4)) as usize;
         let mut all_chat_lines: Vec<(Line, Option<usize>)> = Vec::new();
@@ -121,11 +122,11 @@ impl SidebarView {
         for (actual_idx, msg) in chat_messages.iter().enumerate() {
             match msg {
                 ChatMessage::User(text) => {
-                    let user_style = Style::default().bg(Color::Rgb(26, 28, 34));
+                    let user_style = Style::default().bg(th().element);
 
                     all_chat_lines.push((
                         Line::from(vec![
-                            Span::styled("  You:", user_style.fg(Color::Rgb(150, 185, 255)).add_modifier(Modifier::BOLD)),
+                            Span::styled("  You:", user_style.fg(th().primary).add_modifier(Modifier::BOLD)),
                         ]),
                         None,
                     ));
@@ -137,7 +138,7 @@ impl SidebarView {
                         for l in &wrapped {
                             all_chat_lines.push((
                                 Line::from(vec![
-                                    Span::styled(format!("  {l}"), user_style.fg(Color::White)),
+                                    Span::styled(format!("  {l}"), user_style.fg(th().fg)),
                                 ]),
                                 None,
                             ));
@@ -145,7 +146,7 @@ impl SidebarView {
                         if is_expanded && wrapped.len() > 3 {
                             all_chat_lines.push((
                                 Line::from(vec![
-                                    Span::styled("  ▲ [collapse]", user_style.fg(Color::Rgb(110, 160, 255)).add_modifier(Modifier::BOLD)),
+                                    Span::styled("  ▲ [collapse]", user_style.fg(th().primary).add_modifier(Modifier::BOLD)),
                                 ]),
                                 Some(actual_idx),
                             ));
@@ -154,7 +155,7 @@ impl SidebarView {
                         for l in &wrapped[..2] {
                             all_chat_lines.push((
                                 Line::from(vec![
-                                    Span::styled(format!("  {l}"), user_style.fg(Color::White)),
+                                    Span::styled(format!("  {l}"), user_style.fg(th().fg)),
                                 ]),
                                 None,
                             ));
@@ -162,7 +163,7 @@ impl SidebarView {
                         let last_line = format!("  {} ... [click to expand]", &wrapped[2]);
                         all_chat_lines.push((
                             Line::from(vec![
-                                Span::styled(last_line, user_style.fg(Color::Rgb(120, 175, 255)).add_modifier(Modifier::BOLD)),
+                                Span::styled(last_line, user_style.fg(th().primary).add_modifier(Modifier::BOLD)),
                             ]),
                             Some(actual_idx),
                         ));
@@ -174,9 +175,9 @@ impl SidebarView {
                         if i == 0 {
                             all_chat_lines.push((
                                 Line::from(vec![
-                                    Span::styled("  ⠋ ", Style::default().fg(Color::Rgb(120, 122, 132))),
-                                    Span::styled(format!("[{agent}]: "), Style::default().fg(Color::Rgb(130, 132, 142))),
-                                    Span::styled(l, Style::default().fg(Color::Rgb(160, 162, 172)).add_modifier(Modifier::ITALIC)),
+                                    Span::styled("  ⠋ ", Style::default().fg(th().text_muted)),
+                                    Span::styled(format!("[{agent}]: "), Style::default().fg(th().text_muted)),
+                                    Span::styled(l, Style::default().fg(th().text_sub).add_modifier(Modifier::ITALIC)),
                                 ]),
                                 None,
                             ));
@@ -184,7 +185,7 @@ impl SidebarView {
                             all_chat_lines.push((
                                 Line::from(vec![
                                     Span::raw("    "),
-                                    Span::styled(l, Style::default().fg(Color::Rgb(160, 162, 172)).add_modifier(Modifier::ITALIC)),
+                                    Span::styled(l, Style::default().fg(th().text_sub).add_modifier(Modifier::ITALIC)),
                                 ]),
                                 None,
                             ));
@@ -197,9 +198,9 @@ impl SidebarView {
                         if i == 0 {
                             all_chat_lines.push((
                                 Line::from(vec![
-                                    Span::styled("  ❯ task: ", Style::default().fg(Color::Rgb(120, 122, 132))),
-                                    Span::styled(format!("{tool} "), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                                    Span::styled(format!("({l})"), Style::default().fg(Color::Rgb(130, 132, 142))),
+                                    Span::styled("  ❯ task: ", Style::default().fg(th().text_muted)),
+                                    Span::styled(format!("{tool} "), Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
+                                    Span::styled(format!("({l})"), Style::default().fg(th().text_muted)),
                                 ]),
                                 None,
                             ));
@@ -207,7 +208,7 @@ impl SidebarView {
                             all_chat_lines.push((
                                 Line::from(vec![
                                     Span::raw("    "),
-                                    Span::styled(l, Style::default().fg(Color::Rgb(130, 132, 142))),
+                                    Span::styled(l, Style::default().fg(th().text_muted)),
                                 ]),
                                 None,
                             ));
@@ -221,9 +222,9 @@ impl SidebarView {
                         if i == 0 {
                             all_chat_lines.push((
                                 Line::from(vec![
-                                    Span::styled("    ✔ result: ", Style::default().fg(Color::Rgb(120, 195, 130))),
-                                    Span::styled(l, Style::default().fg(Color::Rgb(210, 212, 220))),
-                                    Span::styled(ms_str.clone(), Style::default().fg(Color::Rgb(110, 112, 120))),
+                                    Span::styled("    ✔ result: ", Style::default().fg(th().success)),
+                                    Span::styled(l, Style::default().fg(th().text)),
+                                    Span::styled(ms_str.clone(), Style::default().fg(th().text_dim)),
                                 ]),
                                 None,
                             ));
@@ -231,7 +232,7 @@ impl SidebarView {
                             all_chat_lines.push((
                                 Line::from(vec![
                                     Span::raw("      "),
-                                    Span::styled(l, Style::default().fg(Color::Rgb(210, 212, 220))),
+                                    Span::styled(l, Style::default().fg(th().text)),
                                 ]),
                                 None,
                             ));
@@ -241,7 +242,7 @@ impl SidebarView {
                 ChatMessage::Agent { sender, text } => {
                     all_chat_lines.push((
                         Line::from(vec![
-                            Span::styled(format!("  ● {sender}:"), Style::default().fg(Color::Rgb(100, 165, 255)).add_modifier(Modifier::BOLD)),
+                            Span::styled(format!("  ● {sender}:"), Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
                         ]),
                         None,
                     ));
@@ -255,7 +256,7 @@ impl SidebarView {
                                 all_chat_lines.push((
                                     Line::from(vec![
                                         Span::raw("    "),
-                                        Span::styled(wl, Style::default().fg(Color::Rgb(210, 212, 220))),
+                                        Span::styled(wl, Style::default().fg(th().text)),
                                     ]),
                                     None,
                                 ));
@@ -273,8 +274,8 @@ impl SidebarView {
                         if i == 0 {
                             all_chat_lines.push((
                                 Line::from(vec![
-                                    Span::styled("  ● system: ", Style::default().fg(Color::Rgb(110, 112, 122))),
-                                    Span::styled(l, Style::default().fg(Color::Rgb(200, 202, 210))),
+                                    Span::styled("  ● system: ", Style::default().fg(th().text_dim)),
+                                    Span::styled(l, Style::default().fg(th().text)),
                                 ]),
                                 None,
                             ));
@@ -282,7 +283,7 @@ impl SidebarView {
                             all_chat_lines.push((
                                 Line::from(vec![
                                     Span::raw("    "),
-                                    Span::styled(l, Style::default().fg(Color::Rgb(200, 202, 210))),
+                                    Span::styled(l, Style::default().fg(th().text)),
                                 ]),
                                 None,
                             ));
@@ -322,7 +323,7 @@ impl SidebarView {
         // 2. Module Inspector Box (Sleek filled surface, only shown when a node is selected)
         if let Some(node) = selected_node {
             let node_block = Block::default()
-                .style(Style::default().bg(Color::Rgb(22, 23, 29)));
+                .style(Style::default().bg(th().element));
             let node_area = chunks[1];
             let status_str = if node.is_paused { "paused" } else { node.status.as_str() };
             let p_rect = Rect::new(node_area.x + 2, node_area.y + 2, 14.min(node_area.width.saturating_sub(4)), 1);
@@ -336,7 +337,7 @@ impl SidebarView {
             if node.status == AgentStatus::Running || node.is_paused {
                 action_spans.push(Span::styled(
                     if node.is_paused { " [ ▶ Resume ] " } else { " [ ⏸ Pause ] " },
-                    Style::default().fg(Color::White).bg(Color::Rgb(38, 40, 50)),
+                    Style::default().fg(th().fg).bg(th().element_hi),
                 ));
                 action_spans.push(Span::raw("  "));
                 opt_pause = Some(p_rect);
@@ -345,24 +346,24 @@ impl SidebarView {
             if has_patches {
                 action_spans.push(Span::styled(
                     " [ ✓ Apply Patch ] ",
-                    Style::default().fg(Color::White).bg(Color::Rgb(38, 40, 50)),
+                    Style::default().fg(th().fg).bg(th().element_hi),
                 ));
                 opt_apply = Some(a_rect);
             }
 
             if opt_pause.is_none() && opt_apply.is_none() {
-                action_spans.push(Span::styled("no pending actions", Style::default().fg(Color::Rgb(110, 112, 120))));
+                action_spans.push(Span::styled("no pending actions", Style::default().fg(th().text_dim)));
             }
 
             let lines = vec![
                 Line::from(vec![
-                    Span::styled("  module: ", Style::default().fg(Color::Rgb(110, 112, 120))),
-                    Span::styled(ellipsize(&node.id, (node_area.width as usize).saturating_sub(28).max(8)), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("  [{status_str}]"), Style::default().fg(if node.is_paused { Color::Rgb(140, 142, 150) } else { Color::White })),
+                    Span::styled("  module: ", Style::default().fg(th().text_dim)),
+                    Span::styled(ellipsize(&node.id, (node_area.width as usize).saturating_sub(28).max(8)), Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("  [{status_str}]"), Style::default().fg(if node.is_paused { th().text_muted } else { th().fg })),
                 ]),
                 Line::from(vec![
-                    Span::styled("  target: ", Style::default().fg(Color::Rgb(110, 112, 120))),
-                    Span::styled(crate::ui::fit::ellipsize_start(node.target_path.as_deref().unwrap_or("-"), (node_area.width as usize).saturating_sub(12).max(8)), Style::default().fg(Color::White)),
+                    Span::styled("  target: ", Style::default().fg(th().text_dim)),
+                    Span::styled(crate::ui::fit::ellipsize_start(node.target_path.as_deref().unwrap_or("-"), (node_area.width as usize).saturating_sub(12).max(8)), Style::default().fg(th().fg)),
                 ]),
                 Line::from(action_spans),
             ];
@@ -388,26 +389,26 @@ impl SidebarView {
 
             let conf_block = Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::White));
+                .border_style(Style::default().fg(th().fg));
             let inner_bw = btn_conf_rect.width.saturating_sub(2) as usize;
             let conf_label = [" [ ✓ Execute Review ] ", " [✓ Execute] ", " ✓ Run ", " ✓ "]
                 .iter()
                 .find(|l| l.chars().count() <= inner_bw)
                 .copied()
                 .unwrap_or(" ✓ ");
-            let conf_text = Line::from(Span::styled(conf_label, Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)));
+            let conf_text = Line::from(Span::styled(conf_label, Style::default().fg(th().on_accent).bg(th().fg).add_modifier(Modifier::BOLD)));
             f.render_widget(Paragraph::new(conf_text).centered().block(conf_block), btn_conf_rect);
 
             let canc_block = Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Rgb(80, 80, 85)));
+                .border_style(Style::default().fg(th().border_hi));
             let inner_cw = btn_canc_rect.width.saturating_sub(2) as usize;
             let canc_label = [" [ ✗ Cancel ] ", " [✗ Cancel] ", " ✗ Esc ", " ✗ "]
                 .iter()
                 .find(|l| l.chars().count() <= inner_cw)
                 .copied()
                 .unwrap_or(" ✗ ");
-            let canc_text = Line::from(Span::styled(canc_label, Style::default().fg(Color::Rgb(150, 150, 155))));
+            let canc_text = Line::from(Span::styled(canc_label, Style::default().fg(th().text_muted)));
             f.render_widget(Paragraph::new(canc_text).centered().block(canc_block), btn_canc_rect);
 
             targets.btn_confirm = Some(btn_conf_rect);
@@ -426,7 +427,7 @@ impl SidebarView {
         let input_rect = prompt_chunks[0];
 
         let prompt_block = Block::default()
-            .style(Style::default().bg(Color::Rgb(24, 25, 31)));
+            .style(Style::default().bg(th().element));
 
         let scroll_y = (num_lines as u16).saturating_sub(input_box_height);
         let prompt_paragraph = Paragraph::new(display_lines)
@@ -438,8 +439,8 @@ impl SidebarView {
         let hint_line = hint_line(
             &[("/", "commands"), ("[Tab]", "complete"), ("[↵]", "send")],
             prompt_chunks[1].width as usize,
-            Style::default().fg(Color::Rgb(140, 180, 255)),
-            Style::default().fg(Color::Rgb(85, 87, 95)),
+            Style::default().fg(th().primary),
+            Style::default().fg(th().border_hi),
             "  •  ",
         );
         f.render_widget(Paragraph::new(hint_line), prompt_chunks[1]);
@@ -458,9 +459,9 @@ impl SidebarView {
             let popup_block = Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Rgb(60, 62, 72)))
-                .style(Style::default().bg(Color::Rgb(16, 17, 22)))
-                .title(Span::styled(format!("  {}  ", ellipsize("commands [↑/↓ select, Tab complete]", (popup_rect.width as usize).saturating_sub(8))), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+                .border_style(Style::default().fg(th().border))
+                .style(Style::default().bg(th().surface))
+                .title(Span::styled(format!("  {}  ", ellipsize("commands [↑/↓ select, Tab complete]", (popup_rect.width as usize).saturating_sub(8))), Style::default().fg(th().fg).add_modifier(Modifier::BOLD)));
 
             let start_idx = if selected_suggestion >= visible_count {
                 selected_suggestion + 1 - visible_count
@@ -498,17 +499,17 @@ impl SidebarView {
 
                 if is_selected {
                     suggestion_lines.push(Line::from(vec![
-                        Span::styled(" ▸ ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
-                        Span::styled(name_txt, Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
-                        Span::styled(args_txt, Style::default().fg(Color::Rgb(60, 62, 70)).bg(Color::White)),
-                        Span::styled(desc_txt, Style::default().fg(Color::Black).bg(Color::White)),
+                        Span::styled(" ▸ ", Style::default().fg(th().on_accent).bg(th().fg).add_modifier(Modifier::BOLD)),
+                        Span::styled(name_txt, Style::default().fg(th().on_accent).bg(th().fg).add_modifier(Modifier::BOLD)),
+                        Span::styled(args_txt, Style::default().fg(th().border).bg(th().fg)),
+                        Span::styled(desc_txt, Style::default().fg(th().on_accent).bg(th().fg)),
                     ]));
                 } else {
                     suggestion_lines.push(Line::from(vec![
-                        Span::styled("   ", Style::default().fg(Color::Rgb(110, 112, 120))),
-                        Span::styled(name_txt, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                        Span::styled(args_txt, Style::default().fg(Color::Rgb(130, 132, 142))),
-                        Span::styled(desc_txt, Style::default().fg(Color::Rgb(150, 152, 160))),
+                        Span::styled("   ", Style::default().fg(th().text_dim)),
+                        Span::styled(name_txt, Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
+                        Span::styled(args_txt, Style::default().fg(th().text_muted)),
+                        Span::styled(desc_txt, Style::default().fg(th().text_muted)),
                     ]));
                 }
             }

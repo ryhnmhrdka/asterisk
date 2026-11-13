@@ -218,7 +218,7 @@ impl AiProvider {
                 "llama3.3:70b",
                 "deepseek-r1:8b",
             ],
-            AiProvider::Custom => &["gpt-4o", "meta-llama/Llama-3.3-70B-Instruct"],
+            AiProvider::Custom => &["deepseek-ai/DeepSeek-V4-Flash-0731", "zai-org/GLM-5.3-Flash"],
         }
     }
 
@@ -392,6 +392,11 @@ pub const AVAILABLE_COMMANDS: &[CommandSuggestion] = &[
         name: "/skills",
         args: "[action]",
         description: "Manage, import, or synthesize 3-tier .skill.md",
+    },
+    CommandSuggestion {
+        name: "/theme",
+        args: "[name]",
+        description: "Switch UI theme live (asterisk, tokyo_night, catppuccin, nord, gruvbox, solarized, terminal)",
     },
     CommandSuggestion {
         name: "/pause",

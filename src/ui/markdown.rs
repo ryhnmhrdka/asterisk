@@ -1,7 +1,8 @@
+use crate::ui::theme::th;
 use super::latex::latex_to_unicode;
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
 };
 
@@ -52,7 +53,7 @@ pub fn parse_markdown(input: &str) -> Vec<Line<'static>> {
                     } else {
                         "  • ".to_string()
                     };
-                    current_spans.push(Span::styled(prefix, Style::default().fg(Color::Rgb(120, 125, 140))));
+                    current_spans.push(Span::styled(prefix, Style::default().fg(th().text_muted)));
                 }
                 Tag::BlockQuote(_) => {
                     in_blockquote = true;
@@ -106,10 +107,10 @@ pub fn parse_markdown(input: &str) -> Vec<Line<'static>> {
                 if is_code_block {
                     for line in processed_text.lines() {
                         lines.push(Line::from(vec![
-                            Span::styled("    │ ", Style::default().fg(Color::DarkGray)),
+                            Span::styled("    │ ", Style::default().fg(th().text_dim)),
                             Span::styled(
                                 line.to_string(),
-                                Style::default().fg(Color::Rgb(200, 210, 225)),
+                                Style::default().fg(th().text),
                             ),
                         ]));
                     }
@@ -117,12 +118,12 @@ pub fn parse_markdown(input: &str) -> Vec<Line<'static>> {
                     let mut style = Style::default();
                     if let Some(lvl) = heading_level {
                         style = match lvl {
-                            1 => style.fg(Color::White).add_modifier(Modifier::BOLD),
-                            2 => style.fg(Color::Rgb(220, 220, 220)).add_modifier(Modifier::BOLD),
-                            _ => style.fg(Color::Gray).add_modifier(Modifier::BOLD),
+                            1 => style.fg(th().fg).add_modifier(Modifier::BOLD),
+                            2 => style.fg(th().text).add_modifier(Modifier::BOLD),
+                            _ => style.fg(th().text_muted).add_modifier(Modifier::BOLD),
                         };
                     } else {
-                        style = style.fg(Color::White);
+                        style = style.fg(th().fg);
                     }
 
                     if is_bold {
@@ -132,7 +133,7 @@ pub fn parse_markdown(input: &str) -> Vec<Line<'static>> {
                         style = style.add_modifier(Modifier::ITALIC);
                     }
                     if in_blockquote {
-                        style = style.fg(Color::Rgb(160, 160, 160));
+                        style = style.fg(th().text_sub);
                     }
 
                     current_spans.push(Span::styled(processed_text, style));
@@ -143,8 +144,8 @@ pub fn parse_markdown(input: &str) -> Vec<Line<'static>> {
                 current_spans.push(Span::styled(
                     format!(" {processed} "),
                     Style::default()
-                        .fg(Color::Rgb(130, 215, 255))
-                        .bg(Color::Rgb(32, 34, 38)),
+                        .fg(th().info)
+                        .bg(th().element),
                 ));
             }
             Event::SoftBreak | Event::HardBreak => {

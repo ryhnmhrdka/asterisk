@@ -1,14 +1,16 @@
+use crate::ui::theme::th;
 use crate::types::AiProvider;
 use crate::ui::fit::{ellipsize, ellipsize_start, hint_line};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
     Frame,
 };
 
 #[allow(dead_code)]
+#[derive(Default)]
 pub struct ModalClickTargets {
     pub provider_buttons: Vec<(AiProvider, Rect)>,
     pub model_preset_buttons: Vec<(String, Rect)>,
@@ -80,12 +82,12 @@ impl ModalView {
         let bg_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Rgb(50, 52, 64)))
+            .border_style(Style::default().fg(th().element_hi))
             .title(Span::styled(
                 "  AI Providers & Models Directory  ",
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default().fg(th().fg).add_modifier(Modifier::BOLD),
             ))
-            .style(Style::default().bg(Color::Rgb(14, 15, 19)));
+            .style(Style::default().bg(th().bg));
         f.render_widget(bg_block, modal_rect);
 
         let inner_chunks = Layout::default()
@@ -128,13 +130,13 @@ impl ModalView {
             row_y += 1;
 
             let (badge_text, badge_color) = if *prov == AiProvider::OllamaLocal {
-                ("● local offline", Color::Rgb(120, 190, 255))
+                ("● local offline", th().primary)
             } else if config.has_discovered_models(*prov) {
-                ("● synced live", Color::Rgb(110, 210, 140))
+                ("● synced live", th().success)
             } else if config.is_provider_configured(*prov) {
-                ("● configured", Color::Rgb(110, 210, 140))
+                ("● configured", th().success)
             } else {
-                ("○ not configured", Color::Rgb(240, 110, 110))
+                ("○ not configured", th().destructive)
             };
 
             let preview_models = config.get_models_for_provider(*prov).join(", ");
@@ -145,17 +147,17 @@ impl ModalView {
 
             if is_sel {
                 lines.push(Line::from(vec![
-                    Span::styled(" ▸ ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("{:<20} ", label_col), Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("{:<15} ", badge_text), Style::default().fg(Color::Rgb(30, 40, 50)).bg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("[{models_snippet}]"), Style::default().fg(Color::Rgb(60, 65, 75)).bg(Color::White)),
+                    Span::styled(" ▸ ", Style::default().fg(th().on_accent).bg(th().fg).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("{:<20} ", label_col), Style::default().fg(th().on_accent).bg(th().fg).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("{:<15} ", badge_text), Style::default().fg(th().element_hi).bg(th().fg).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("[{models_snippet}]"), Style::default().fg(th().border).bg(th().fg)),
                 ]));
             } else {
                 lines.push(Line::from(vec![
                     Span::raw("   "),
-                    Span::styled(format!("{:<20} ", label_col), Style::default().fg(Color::Rgb(210, 215, 225))),
+                    Span::styled(format!("{:<20} ", label_col), Style::default().fg(th().text)),
                     Span::styled(format!("{:<15} ", badge_text), Style::default().fg(badge_color)),
-                    Span::styled(format!("[{models_snippet}]"), Style::default().fg(Color::Rgb(130, 135, 145))),
+                    Span::styled(format!("[{models_snippet}]"), Style::default().fg(th().text_muted)),
                 ]));
             }
         }
@@ -172,8 +174,8 @@ impl ModalView {
                 ("[Esc]", "Close"),
             ],
             inner_chunks[1].width as usize,
-            Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36)),
-            Style::default().fg(Color::Rgb(110, 115, 125)),
+            Style::default().fg(th().fg).bg(th().element),
+            Style::default().fg(th().text_dim),
             "  ",
         );
         f.render_widget(Paragraph::new(footer_line), inner_chunks[1]);
@@ -199,12 +201,12 @@ impl ModalView {
         let bg_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Rgb(60, 64, 80)))
+            .border_style(Style::default().fg(th().border))
             .title(Span::styled(
                 format!("  Provider Hub: {}  ", provider.name()),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default().fg(th().fg).add_modifier(Modifier::BOLD),
             ))
-            .style(Style::default().bg(Color::Rgb(14, 15, 19)));
+            .style(Style::default().bg(th().bg));
         f.render_widget(bg_block, modal_rect);
 
         let inner_chunks = Layout::default()
@@ -242,42 +244,42 @@ impl ModalView {
 
         let live_label = format!("● Connected ({} live models)", models_list.len());
         let (status_text, status_color) = if provider == AiProvider::OllamaLocal {
-            ("● Local Air-gap (Ready)", Color::Rgb(120, 190, 255))
+            ("● Local Air-gap (Ready)", th().primary)
         } else if has_live {
-            (live_label.as_str(), Color::Rgb(110, 210, 140))
+            (live_label.as_str(), th().success)
         } else if is_configured {
-            ("● Connected & Authenticated", Color::Rgb(110, 210, 140))
+            ("● Connected & Authenticated", th().success)
         } else {
-            ("○ Not Configured (Key Required)", Color::Rgb(240, 110, 110))
+            ("○ Not Configured (Key Required)", th().destructive)
         };
 
         let lines = vec![
             Line::from(vec![
-                Span::styled(" CONNECTION & CREDENTIALS OVERVIEW ", Style::default().fg(Color::Rgb(255, 120, 160)).add_modifier(Modifier::BOLD)),
+                Span::styled(" CONNECTION & CREDENTIALS OVERVIEW ", Style::default().fg(th().accent).add_modifier(Modifier::BOLD)),
             ]),
             Line::raw(""),
             Line::from(vec![
-                Span::styled("   Status:       ", Style::default().fg(Color::Rgb(140, 145, 160))),
+                Span::styled("   Status:       ", Style::default().fg(th().text_muted)),
                 Span::styled(status_text, Style::default().fg(status_color)),
             ]),
             Line::from(vec![
-                Span::styled("   API Key:      ", Style::default().fg(Color::Rgb(140, 145, 160))),
+                Span::styled("   API Key:      ", Style::default().fg(th().text_muted)),
                 Span::styled(
                     key_display,
                     Style::default().fg(if is_configured {
-                        Color::Rgb(220, 225, 235)
+                        th().text
                     } else {
-                        Color::Rgb(160, 165, 175)
+                        th().text_sub
                     }),
                 ),
             ]),
             Line::from(vec![
-                Span::styled("   Endpoint URL: ", Style::default().fg(Color::Rgb(140, 145, 160))),
-                Span::styled(base_url_display, Style::default().fg(Color::Rgb(180, 185, 200))),
+                Span::styled("   Endpoint URL: ", Style::default().fg(th().text_muted)),
+                Span::styled(base_url_display, Style::default().fg(th().text_sub)),
             ]),
             Line::from(vec![
-                Span::styled("   Models:       ", Style::default().fg(Color::Rgb(140, 145, 160))),
-                Span::styled(presets_display, Style::default().fg(Color::Rgb(120, 190, 255))),
+                Span::styled("   Models:       ", Style::default().fg(th().text_muted)),
+                Span::styled(presets_display, Style::default().fg(th().primary)),
             ]),
         ];
         f.render_widget(Paragraph::new(lines), inner_chunks[0]);
@@ -285,7 +287,7 @@ impl ModalView {
         // Action Bar for this specific provider (sleek, properly padded, strictly within borders)
         let actions_block = Block::default()
             .borders(Borders::TOP)
-            .border_style(Style::default().fg(Color::Rgb(36, 40, 52)));
+            .border_style(Style::default().fg(th().element_hi));
 
         let action_items = vec![hint_line(
             &[
@@ -296,8 +298,8 @@ impl ModalView {
                 ("[Esc]", "Back"),
             ],
             inner_chunks[1].width as usize,
-            Style::default().fg(Color::Black).bg(Color::Rgb(215, 225, 245)).add_modifier(Modifier::BOLD),
-            Style::default().fg(Color::White),
+            Style::default().fg(th().on_accent).bg(th().primary).add_modifier(Modifier::BOLD),
+            Style::default().fg(th().fg),
             "  ",
         )];
         f.render_widget(Paragraph::new(action_items).block(actions_block), inner_chunks[1]);
@@ -325,12 +327,12 @@ impl ModalView {
         let bg_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Rgb(60, 64, 80)))
+            .border_style(Style::default().fg(th().border))
             .title(Span::styled(
                 "  Select model  ",
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default().fg(th().fg).add_modifier(Modifier::BOLD),
             ))
-            .style(Style::default().bg(Color::Rgb(14, 15, 19)));
+            .style(Style::default().bg(th().bg));
         f.render_widget(bg_block, modal_rect);
 
         let inner_chunks = Layout::default()
@@ -355,18 +357,18 @@ impl ModalView {
         // 1. Search Box
         let search_display = if search_query.is_empty() {
             Line::from(vec![
-                Span::styled("Search models (e.g. claude, gpt-4o, llama, deepseek)...", Style::default().fg(Color::Rgb(90, 95, 110))),
+                Span::styled("Search models (e.g. claude, gpt-4o, llama, deepseek)...", Style::default().fg(th().border_hi)),
             ])
         } else {
             Line::from(vec![
-                Span::styled("Search: ", Style::default().fg(Color::Rgb(140, 145, 160))),
-                Span::styled(search_query, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled("█", Style::default().fg(Color::Rgb(100, 180, 255))),
+                Span::styled("Search: ", Style::default().fg(th().text_muted)),
+                Span::styled(search_query, Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
+                Span::styled("█", Style::default().fg(th().primary)),
             ])
         };
         let search_block = Block::default()
             .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(Color::Rgb(30, 32, 40)));
+            .border_style(Style::default().fg(th().element));
         f.render_widget(Paragraph::new(search_display).block(search_block), inner_chunks[0]);
 
         // 2. Grouped Models List (OpenCode Style)
@@ -377,37 +379,41 @@ impl ModalView {
             lines.push(Line::raw(""));
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled("No models match your search query.", Style::default().fg(Color::Rgb(130, 135, 145))),
+                Span::styled("No models match your search query.", Style::default().fg(th().text_muted)),
             ]));
         } else {
             let max_visible = list_area.height as usize;
-            let start_idx = if selected_index >= max_visible {
-                selected_index + 1 - max_visible
-            } else {
-                0
-            };
+            let mut all_lines = Vec::new();
+            let mut selected_line_idx = 0;
 
             let mut prev_prov: Option<AiProvider> = None;
-            for (idx, (prov, model_name, is_conf)) in items.iter().enumerate().skip(start_idx).take(max_visible) {
-                // Section header if new provider group
+            
+            // Rakit semua baris terlebih dahulu tanpa .skip() dan .take()
+            for (idx, (prov, model_name, is_conf)) in items.iter().enumerate() {
+                // Section header jika grup provider baru
                 if prev_prov != Some(*prov) {
                     prev_prov = Some(*prov);
                     let (section_badge, section_color) = if *prov == AiProvider::OllamaLocal {
-                        ("Offline", Color::Rgb(110, 190, 255))
+                        ("Offline", th().primary)
                     } else if *is_conf {
-                        ("Ready", Color::Rgb(110, 210, 140))
+                        ("Ready", th().success)
                     } else {
-                        ("Key Required", Color::Rgb(240, 110, 110))
+                        ("Key Required", th().destructive)
                     };
-                    lines.push(Line::from(vec![
+                    all_lines.push(Line::from(vec![
                         Span::raw(" "),
-                        Span::styled(prov.name(), Style::default().fg(Color::Rgb(255, 120, 160)).add_modifier(Modifier::BOLD)),
+                        Span::styled(prov.name(), Style::default().fg(th().accent).add_modifier(Modifier::BOLD)),
                         Span::raw("  "),
                         Span::styled(format!("[{section_badge}]"), Style::default().fg(section_color)),
                     ]));
                 }
 
                 let is_sel = idx == selected_index;
+                if is_sel {
+                    // Catat posisi baris sebenarnya (setelah ditambah header)
+                    selected_line_idx = all_lines.len();
+                }
+
                 let is_active = model_name == current_active_model;
                 let active_bullet = if is_active { "● " } else { "  " };
 
@@ -420,28 +426,41 @@ impl ModalView {
                 };
 
                 let avail_color = if *prov == AiProvider::OllamaLocal || *is_conf {
-                    Color::Rgb(140, 145, 160)
+                    th().text_muted
                 } else {
-                    Color::Rgb(230, 110, 110)
+                    th().destructive
                 };
 
                 let row_width = (list_area.width.saturating_sub(18)) as usize;
                 let truncated_name = ellipsize(model_name, row_width);
 
                 if is_sel {
-                    lines.push(Line::from(vec![
-                        Span::styled(format!(" {active_bullet}"), Style::default().fg(Color::Black).bg(Color::Rgb(80, 170, 250)).add_modifier(Modifier::BOLD)),
-                        Span::styled(format!("{:<width$}", truncated_name, width = row_width), Style::default().fg(Color::Black).bg(Color::Rgb(80, 170, 250)).add_modifier(Modifier::BOLD)),
-                        Span::styled(format!("{:>10} ", access_tier), Style::default().fg(Color::Rgb(20, 30, 40)).bg(Color::Rgb(80, 170, 250)).add_modifier(Modifier::BOLD)),
+                    all_lines.push(Line::from(vec![
+                        Span::styled(format!(" {active_bullet}"), Style::default().fg(th().on_accent).bg(th().primary).add_modifier(Modifier::BOLD)),
+                        Span::styled(format!("{:<width$}", truncated_name, width = row_width), Style::default().fg(th().on_accent).bg(th().primary).add_modifier(Modifier::BOLD)),
+                        Span::styled(format!("{:>10} ", access_tier), Style::default().fg(th().element).bg(th().primary).add_modifier(Modifier::BOLD)),
                     ]));
                 } else {
-                    lines.push(Line::from(vec![
-                        Span::styled(format!(" {active_bullet}"), if is_active { Style::default().fg(Color::Rgb(110, 210, 140)) } else { Style::default().fg(Color::Rgb(80, 85, 95)) }),
-                        Span::styled(format!("{:<width$}", truncated_name, width = row_width), Style::default().fg(if is_active { Color::White } else { Color::Rgb(200, 205, 215) })),
+                    all_lines.push(Line::from(vec![
+                        Span::styled(format!(" {active_bullet}"), if is_active { Style::default().fg(th().success) } else { Style::default().fg(th().border_hi) }),
+                        Span::styled(format!("{:<width$}", truncated_name, width = row_width), Style::default().fg(if is_active { th().fg } else { th().text })),
                         Span::styled(format!("{:>10} ", access_tier), Style::default().fg(avail_color)),
                     ]));
                 }
             }
+
+            // Hitung offset scroll berdasarkan total baris nyata (model + header)
+            let start_line = if max_visible > 0 && selected_line_idx >= max_visible {
+                selected_line_idx + 1 - max_visible
+            } else {
+                0
+            };
+
+            // Jika item pertama (indeks 0) sedang dipilih, pastikan header di atasnya ikut terlihat
+            let start_line = if selected_index == 0 { 0 } else { start_line };
+
+            // Potong baris agar pas dengan tinggi layar
+            lines = all_lines.into_iter().skip(start_line).take(max_visible).collect();
         }
         f.render_widget(Paragraph::new(lines), list_area);
 
@@ -454,8 +473,8 @@ impl ModalView {
                 ("[Esc]", "Back"),
             ],
             inner_chunks[2].width as usize,
-            Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36)),
-            Style::default().fg(Color::Rgb(110, 112, 120)),
+            Style::default().fg(th().fg).bg(th().element),
+            Style::default().fg(th().text_dim),
             "  ",
         );
         f.render_widget(Paragraph::new(footer_line), inner_chunks[2]);
@@ -490,12 +509,12 @@ impl ModalView {
         let bg_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(if is_locked { Color::Rgb(100, 70, 70) } else { Color::Rgb(50, 52, 64) }))
+            .border_style(Style::default().fg(if is_locked { th().destructive } else { th().element_hi }))
             .title(Span::styled(
                 title_text,
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default().fg(th().fg).add_modifier(Modifier::BOLD),
             ))
-            .style(Style::default().bg(Color::Rgb(14, 15, 19)));
+            .style(Style::default().bg(th().bg));
         f.render_widget(bg_block, modal_rect);
 
         let inner_chunks = Layout::default()
@@ -522,19 +541,31 @@ impl ModalView {
         if is_locked {
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled("⚠️  No API Key Configured", Style::default().fg(Color::Rgb(255, 180, 100)).add_modifier(Modifier::BOLD)),
+                Span::styled("⚠️  No API Key Configured", Style::default().fg(th().warning).add_modifier(Modifier::BOLD)),
             ]));
             lines.push(Line::from(vec![
                 Span::raw("    "),
-                Span::styled("Models are locked and cannot be accessed yet.", Style::default().fg(Color::Rgb(150, 152, 160))),
+                Span::styled("Models are locked and cannot be accessed yet.", Style::default().fg(th().text_muted)),
             ]));
             lines.push(Line::raw(""));
             lines.push(Line::from(vec![
-                Span::styled("  ▸ Press [Enter] to configure API Key", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("  ▸ Press [Enter] to configure API Key", Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
             ]));
         } else {
+            // 1. Dapatkan tinggi area yang terlihat (berapa baris yang muat)
+            let visible_height = list_area.height as usize;
+            
+            // 2. Hitung dari indeks ke berapa kita harus mulai menggambar agar selected_index selalu terlihat
+            let start_index = if selected_index >= visible_height {
+                selected_index.saturating_sub(visible_height - 1)
+            } else {
+                0
+            };
+
             let mut row_y = list_area.y;
-            for (i, model_name) in presets.iter().enumerate() {
+            
+            // 3. Gunakan .skip() dan .take() agar HANYA memproses model yang terlihat di layar
+            for (i, model_name) in presets.iter().enumerate().skip(start_index).take(visible_height) {
                 let is_sel = i == selected_index;
                 let item_rect = Rect::new(list_area.x, row_y, list_area.width, 1);
                 targets.model_preset_buttons.push((model_name.to_string(), item_rect));
@@ -542,37 +573,38 @@ impl ModalView {
 
                 if is_sel {
                     lines.push(Line::from(vec![
-                        Span::styled("  ▸ ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
-                        Span::styled(format!("{:<width$}", model_name, width = (list_area.width.saturating_sub(6)) as usize), Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)),
+                        Span::styled("  ▸ ", Style::default().fg(th().on_accent).bg(th().fg).add_modifier(Modifier::BOLD)),
+                        Span::styled(format!("{:<width$}", model_name, width = (list_area.width.saturating_sub(6)) as usize), Style::default().fg(th().on_accent).bg(th().fg).add_modifier(Modifier::BOLD)),
                     ]));
                 } else {
                     lines.push(Line::from(vec![
                         Span::raw("    "),
-                        Span::styled(*model_name, Style::default().fg(Color::Rgb(175, 178, 188))),
+                        Span::styled(*model_name, Style::default().fg(th().text_sub)),
                     ]));
                 }
             }
         }
+        
         f.render_widget(Paragraph::new(lines), list_area);
 
         // Footer
         let footer_line = if is_locked {
             Line::from(vec![
                 Span::raw("  "),
-                Span::styled("[Enter]", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
-                Span::styled(" Setup Key   ", Style::default().fg(Color::Rgb(110, 112, 120))),
-                Span::styled("[Esc]", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
-                Span::styled(" Cancel", Style::default().fg(Color::Rgb(110, 112, 120))),
+                Span::styled("[Enter]", Style::default().fg(th().fg).bg(th().element)),
+                Span::styled(" Setup Key   ", Style::default().fg(th().text_dim)),
+                Span::styled("[Esc]", Style::default().fg(th().fg).bg(th().element)),
+                Span::styled(" Cancel", Style::default().fg(th().text_dim)),
             ])
         } else {
             Line::from(vec![
                 Span::raw("  "),
-                Span::styled("[↑/↓]", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
-                Span::styled(" Select   ", Style::default().fg(Color::Rgb(110, 112, 120))),
-                Span::styled("[Enter]", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
-                Span::styled(" Confirm   ", Style::default().fg(Color::Rgb(110, 112, 120))),
-                Span::styled("[Esc]", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
-                Span::styled(" Close", Style::default().fg(Color::Rgb(110, 112, 120))),
+                Span::styled("[↑/↓]", Style::default().fg(th().fg).bg(th().element)),
+                Span::styled(" Select   ", Style::default().fg(th().text_dim)),
+                Span::styled("[Enter]", Style::default().fg(th().fg).bg(th().element)),
+                Span::styled(" Confirm   ", Style::default().fg(th().text_dim)),
+                Span::styled("[Esc]", Style::default().fg(th().fg).bg(th().element)),
+                Span::styled(" Close", Style::default().fg(th().text_dim)),
             ])
         };
         f.render_widget(Paragraph::new(footer_line), inner_chunks[1]);
@@ -601,12 +633,12 @@ impl ModalView {
         let bg_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Rgb(50, 52, 64)))
+            .border_style(Style::default().fg(th().element_hi))
             .title(Span::styled(
                 format!("  {}  ", ellipsize(title, (modal_width as usize).saturating_sub(8))),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default().fg(th().fg).add_modifier(Modifier::BOLD),
             ))
-            .style(Style::default().bg(Color::Rgb(14, 15, 19)));
+            .style(Style::default().bg(th().bg));
         f.render_widget(bg_block, modal_rect);
 
         let inner_chunks = Layout::default()
@@ -632,20 +664,20 @@ impl ModalView {
         let top_msg = if let Some(err) = error_msg {
             Line::from(vec![
                 Span::raw("  "),
-                Span::styled("✖ ", Style::default().fg(Color::Rgb(255, 120, 120))),
-                Span::styled(ellipsize(err, (inner_chunks[0].width as usize).saturating_sub(5)), Style::default().fg(Color::Rgb(255, 120, 120))),
+                Span::styled("✖ ", Style::default().fg(th().destructive)),
+                Span::styled(ellipsize(err, (inner_chunks[0].width as usize).saturating_sub(5)), Style::default().fg(th().destructive)),
             ])
         } else {
             Line::from(vec![
                 Span::raw("  "),
-                Span::styled(ellipsize(label, (inner_chunks[0].width as usize).saturating_sub(3)), Style::default().fg(Color::Rgb(140, 142, 150))),
+                Span::styled(ellipsize(label, (inner_chunks[0].width as usize).saturating_sub(3)), Style::default().fg(th().text_muted)),
             ])
         };
         f.render_widget(Paragraph::new(top_msg), inner_chunks[0]);
 
         // Row 2: Clean single input slot
         let input_rect = inner_chunks[1];
-        let input_block = Block::default().style(Style::default().bg(Color::Rgb(22, 24, 30)));
+        let input_block = Block::default().style(Style::default().bg(th().element));
         f.render_widget(input_block, input_rect);
 
         let input_w = (input_rect.width as usize).saturating_sub(2 + 2 + 1 + 1);
@@ -663,16 +695,16 @@ impl ModalView {
 
         let input_line = Line::from(vec![
             Span::raw("  "),
-            Span::styled("▸ ", Style::default().fg(Color::Rgb(140, 200, 255)).add_modifier(Modifier::BOLD)),
+            Span::styled("▸ ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
             Span::styled(
                 display_val,
                 if input_value.is_empty() {
-                    Style::default().fg(Color::Rgb(100, 102, 110))
+                    Style::default().fg(th().text_dim)
                 } else {
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                    Style::default().fg(th().fg).add_modifier(Modifier::BOLD)
                 },
             ),
-            Span::styled("█", Style::default().fg(Color::White)),
+            Span::styled("█", Style::default().fg(th().fg)),
         ]);
         f.render_widget(Paragraph::new(vec![Line::raw(""), input_line]), input_rect);
 
@@ -689,19 +721,19 @@ impl ModalView {
 
         let hotkey_info = Line::from(vec![
             Span::raw("  "),
-            Span::styled("[Enter]", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
-            Span::styled(" Save", Style::default().fg(Color::Rgb(110, 112, 120))),
+            Span::styled("[Enter]", Style::default().fg(th().fg).bg(th().element)),
+            Span::styled(" Save", Style::default().fg(th().text_dim)),
         ]);
         f.render_widget(Paragraph::new(hotkey_info), footer_chunks[0]);
 
         let btn_save_rect = footer_chunks[1];
         targets.btn_save = Some(btn_save_rect);
-        let save_span = Span::styled(" Save [↵] ", Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD));
+        let save_span = Span::styled(" Save [↵] ", Style::default().fg(th().on_accent).bg(th().fg).add_modifier(Modifier::BOLD));
         f.render_widget(Paragraph::new(Line::from(save_span)).centered(), btn_save_rect);
 
         let btn_cancel_rect = footer_chunks[3];
         targets.btn_cancel = Some(btn_cancel_rect);
-        let cancel_span = Span::styled(" Cancel [Esc] ", Style::default().fg(Color::Rgb(170, 172, 180)).bg(Color::Rgb(30, 32, 40)));
+        let cancel_span = Span::styled(" Cancel [Esc] ", Style::default().fg(th().text_sub).bg(th().element));
         f.render_widget(Paragraph::new(Line::from(cancel_span)).centered(), btn_cancel_rect);
 
         targets
@@ -724,12 +756,12 @@ impl ModalView {
         let bg_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::Rgb(60, 64, 80)))
+            .border_style(Style::default().fg(th().border))
             .title(Span::styled(
                 "  AI Engine & Security Configuration (/config)  ",
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default().fg(th().fg).add_modifier(Modifier::BOLD),
             ))
-            .style(Style::default().bg(Color::Rgb(14, 15, 19)));
+            .style(Style::default().bg(th().bg));
         f.render_widget(bg_block, modal_rect);
 
         let inner_chunks = Layout::default()
@@ -764,35 +796,35 @@ impl ModalView {
         // 1. Full-width Profile Info Overview
         let profile_lines = vec![
             Line::from(vec![
-                Span::styled(" CURRENT ACTIVE PROFILE ", Style::default().fg(Color::Rgb(255, 120, 160)).add_modifier(Modifier::BOLD)),
+                Span::styled(" CURRENT ACTIVE PROFILE ", Style::default().fg(th().accent).add_modifier(Modifier::BOLD)),
             ]),
             Line::raw(""),
             Line::from(vec![
-                Span::styled("   Provider:   ", Style::default().fg(Color::Rgb(140, 145, 160))),
-                Span::styled(prov.name(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("   Provider:   ", Style::default().fg(th().text_muted)),
+                Span::styled(prov.name(), Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
                 Span::raw("  "),
                 Span::styled(
                     if is_ready { "● ready" } else { "○ unauthenticated" },
-                    Style::default().fg(if is_ready { Color::Rgb(110, 210, 140) } else { Color::Rgb(240, 110, 110) }),
+                    Style::default().fg(if is_ready { th().success } else { th().destructive }),
                 ),
             ]),
             Line::from(vec![
-                Span::styled("   Model:      ", Style::default().fg(Color::Rgb(140, 145, 160))),
-                Span::styled(model, Style::default().fg(Color::Rgb(110, 190, 255)).add_modifier(Modifier::BOLD)),
+                Span::styled("   Model:      ", Style::default().fg(th().text_muted)),
+                Span::styled(model, Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
             ]),
             Line::from(vec![
-                Span::styled("   Secret Key: ", Style::default().fg(Color::Rgb(140, 145, 160))),
-                Span::styled(key_status, Style::default().fg(Color::Rgb(215, 220, 230))),
+                Span::styled("   Secret Key: ", Style::default().fg(th().text_muted)),
+                Span::styled(key_status, Style::default().fg(th().text)),
             ]),
             Line::from(vec![
-                Span::styled("   Endpoint:   ", Style::default().fg(Color::Rgb(140, 145, 160))),
-                Span::styled(base_url, Style::default().fg(Color::Rgb(175, 180, 195))),
+                Span::styled("   Endpoint:   ", Style::default().fg(th().text_muted)),
+                Span::styled(base_url, Style::default().fg(th().text_sub)),
             ]),
             Line::from(vec![
-                Span::styled("   Isolation:  ", Style::default().fg(Color::Rgb(140, 145, 160))),
+                Span::styled("   Isolation:  ", Style::default().fg(th().text_muted)),
                 Span::styled(
                     if prov == AiProvider::OllamaLocal { "Offline Local Air-gap" } else { "Sandboxed Cloud Proxy" },
-                    Style::default().fg(Color::Rgb(150, 155, 170)),
+                    Style::default().fg(th().text_sub),
                 ),
             ]),
         ];
@@ -801,7 +833,7 @@ impl ModalView {
         // 2. Simple Action Shortcuts Bar at Bottom (Pill badges with subtle border)
         let actions_block = Block::default()
             .borders(Borders::TOP)
-            .border_style(Style::default().fg(Color::Rgb(30, 32, 40)));
+            .border_style(Style::default().fg(th().element));
 
         let action_items = vec![
             Line::raw(""),
@@ -813,8 +845,8 @@ impl ModalView {
                     ("[4]", "Base URL"),
                 ],
                 inner_chunks[1].width as usize,
-                Style::default().fg(Color::Black).bg(Color::Rgb(220, 225, 235)).add_modifier(Modifier::BOLD),
-                Style::default().fg(Color::White),
+                Style::default().fg(th().on_accent).bg(th().text).add_modifier(Modifier::BOLD),
+                Style::default().fg(th().fg),
                 "  ",
             ),
         ];
@@ -823,8 +855,8 @@ impl ModalView {
         // 3. Subtle Footer Line
         let footer_line = Line::from(vec![
             Span::raw(" "),
-            Span::styled("[Esc]", Style::default().fg(Color::White).bg(Color::Rgb(26, 28, 36))),
-            Span::styled(" Exit Settings", Style::default().fg(Color::Rgb(110, 115, 125))),
+            Span::styled("[Esc]", Style::default().fg(th().fg).bg(th().element)),
+            Span::styled(" Exit Settings", Style::default().fg(th().text_dim)),
         ]);
         f.render_widget(Paragraph::new(footer_line), inner_chunks[2]);
 

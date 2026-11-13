@@ -1,7 +1,8 @@
+use crate::ui::theme::th;
 use crate::types::DynamicLogEntry;
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
@@ -31,15 +32,15 @@ impl LogsView {
 
             let mut spans = vec![
                 Span::raw("  "),
-                Span::styled(format!("{time_str}  "), Style::default().fg(Color::Rgb(110, 112, 120))),
-                Span::styled(format!("{agent_badge:<16} "), Style::default().fg(Color::White)),
-                Span::styled(format!("{level_badge:<8} "), Style::default().fg(Color::Rgb(130, 132, 142))),
+                Span::styled(format!("{time_str}  "), Style::default().fg(th().text_dim)),
+                Span::styled(format!("{agent_badge:<16} "), Style::default().fg(th().fg)),
+                Span::styled(format!("{level_badge:<8} "), Style::default().fg(th().text_muted)),
             ];
 
             if entry.is_improvisation {
-                spans.push(Span::styled(&entry.message, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+                spans.push(Span::styled(&entry.message, Style::default().fg(th().fg).add_modifier(Modifier::BOLD)));
             } else {
-                spans.push(Span::styled(&entry.message, Style::default().fg(Color::Rgb(180, 182, 192))));
+                spans.push(Span::styled(&entry.message, Style::default().fg(th().text_sub)));
             }
 
             lines.push(Line::from(spans));
@@ -48,7 +49,7 @@ impl LogsView {
         if lines.is_empty() {
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled("awaiting execution dispatch. press [space] to run audit harness.", Style::default().fg(Color::Rgb(120, 122, 130))),
+                Span::styled("awaiting execution dispatch. press [space] to run audit harness.", Style::default().fg(th().text_muted)),
             ]));
         }
 

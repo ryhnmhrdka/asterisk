@@ -19,6 +19,8 @@ pub struct AppConfig {
     pub discovered_models: HashMap<String, Vec<String>>,
     #[serde(default)]
     pub custom_provider_name: Option<String>,
+    #[serde(default)]
+    pub theme: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -32,6 +34,7 @@ impl Default for AppConfig {
             provider_base_urls: HashMap::new(),
             discovered_models: HashMap::new(),
             custom_provider_name: None,
+            theme: None,
         }
     }
 }

@@ -1,10 +1,11 @@
+use crate::ui::theme::th;
 use crate::types::{AgentStatus, SproutedNodeInfo};
 use rataflow::{
     Edge, EdgeMarker, EdgeStyle, Flow, Node, NodeContent, NodeRenderContext, StepEdge,
 };
 use ratatui::{
     buffer::Buffer,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Widget},
 };
@@ -34,40 +35,40 @@ impl NodeContent for AgentNodeContent {
             for x in ctx.area.left()..ctx.area.right() {
                 if let Some(cell) = buf.cell_mut((x, y)) {
                     cell.set_char(' ');
-                    cell.set_bg(Color::Rgb(16, 18, 24));
+                    cell.set_bg(th().surface);
                 }
             }
         }
 
         // 2. Technical ASCII-like monochrome tags (No emojis)
         let (tag, tag_color) = match self.tier.as_str() {
-            "planner" => ("[#] ORCH", Color::Rgb(140, 200, 255)),
-            "folder" => ("[/] DIR", Color::Rgb(160, 165, 180)),
-            "file" => ("[.] FILE", Color::Rgb(160, 165, 180)),
+            "planner" => ("[#] ORCH", th().primary),
+            "folder" => ("[/] DIR", th().text_sub),
+            "file" => ("[.] FILE", th().text_sub),
             "subagent" => match self.id.as_str() {
-                "sub_secrets" => ("[>] SECRET", Color::Rgb(180, 170, 255)),
-                "sub_sast" => ("[>] SAST", Color::Rgb(180, 170, 255)),
-                "sub_sca" => ("[>] SCA", Color::Rgb(180, 170, 255)),
-                "sub_net" => ("[>] NET", Color::Rgb(180, 170, 255)),
-                "sub_patcher" => ("[!] PATCH", Color::Rgb(255, 160, 160)),
-                "sub_verifier" => ("[✓] VERIFY", Color::Rgb(140, 220, 180)),
-                _ => ("[>] AGENT", Color::Rgb(180, 170, 255)),
+                "sub_secrets" => ("[>] SECRET", th().primary),
+                "sub_sast" => ("[>] SAST", th().primary),
+                "sub_sca" => ("[>] SCA", th().primary),
+                "sub_net" => ("[>] NET", th().primary),
+                "sub_patcher" => ("[!] PATCH", th().destructive),
+                "sub_verifier" => ("[✓] VERIFY", th().success),
+                _ => ("[>] AGENT", th().primary),
             },
-            "gate" => ("[#] GATE", Color::Rgb(255, 200, 90)),
-            _ => ("[*] NODE", Color::Rgb(160, 165, 180)),
+            "gate" => ("[#] GATE", th().warning),
+            _ => ("[*] NODE", th().text_sub),
         };
 
         // 3. Border styling
         let border_color = if ctx.selected {
-            Color::Rgb(130, 220, 255)
+            th().info
         } else if self.is_paused {
-            Color::Rgb(60, 62, 70)
+            th().border
         } else if self.status == AgentStatus::Running {
-            Color::Rgb(100, 180, 240)
+            th().primary
         } else if self.findings_count > 0 {
-            Color::Rgb(220, 80, 80)
+            th().destructive
         } else {
-            Color::Rgb(65, 70, 85)
+            th().border
         };
 
         let mut border_style = Style::default().fg(border_color);
@@ -89,7 +90,7 @@ impl NodeContent for AgentNodeContent {
                 "[Space: pause]"
             };
             block = block.title_bottom(Line::from(vec![
-                Span::styled(format!(" {} ", action_hint), Style::default().fg(Color::Rgb(140, 220, 255)).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" {} ", action_hint), Style::default().fg(th().info).add_modifier(Modifier::BOLD)),
             ]));
         }
 
@@ -105,9 +106,9 @@ impl NodeContent for AgentNodeContent {
 
         // 4. Row 0: Title text
         let title_style = if ctx.selected {
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            Style::default().fg(th().fg).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Rgb(230, 235, 245))
+            Style::default().fg(th().text)
         };
         let title_truncated = if self.title.len() > avail_w {
             format!("{}...", &self.title[..avail_w.saturating_sub(3)])
@@ -118,7 +119,7 @@ impl NodeContent for AgentNodeContent {
 
         // 5. Row 1: Subtitle / Scope description
         if inner.height > 1 {
-            let sub_style = Style::default().fg(Color::Rgb(125, 130, 145));
+            let sub_style = Style::default().fg(th().text_muted);
             let sub_truncated = if self.subtitle.len() > avail_w {
                 format!("{}...", &self.subtitle[..avail_w.saturating_sub(3)])
             } else {
@@ -130,17 +131,17 @@ impl NodeContent for AgentNodeContent {
         // 6. Row 2: Status pill + findings count badge
         if inner.height > 2 {
             let (status_text, status_fg, status_bg, is_bold) = if self.is_paused {
-                ("■ PAUSED", Color::Rgb(150, 155, 165), Color::Rgb(32, 34, 44), false)
+                ("■ PAUSED", th().text_sub, th().element_hi, false)
             } else {
                 match self.status {
-                    AgentStatus::Idle => ("○ IDLE", Color::Rgb(140, 145, 155), Color::Rgb(28, 30, 38), false),
-                    AgentStatus::Planning => ("◐ PLAN", Color::Rgb(160, 210, 255), Color::Rgb(25, 45, 70), true),
-                    AgentStatus::WaitingConfirmation => ("▲ CONFIRM", Color::Rgb(255, 200, 80), Color::Rgb(65, 50, 20), true),
-                    AgentStatus::Running => ("● RUNNING", Color::Rgb(100, 240, 255), Color::Rgb(18, 55, 80), true),
-                    AgentStatus::Paused => ("■ PAUSED", Color::Rgb(150, 155, 165), Color::Rgb(32, 34, 44), false),
-                    AgentStatus::Adapting => ("◈ ADAPTING", Color::Rgb(210, 170, 255), Color::Rgb(55, 30, 75), true),
-                    AgentStatus::Success => ("✓ PASSED", Color::Rgb(120, 240, 160), Color::Rgb(20, 55, 38), true),
-                    AgentStatus::Failed => ("✗ ALERT", Color::Rgb(255, 110, 110), Color::Rgb(65, 22, 22), true),
+                    AgentStatus::Idle => ("○ IDLE", th().text_muted, th().element, false),
+                    AgentStatus::Planning => ("◐ PLAN", th().primary, th().primary_bg, true),
+                    AgentStatus::WaitingConfirmation => ("▲ CONFIRM", th().warning, th().warning_bg, true),
+                    AgentStatus::Running => ("● RUNNING", th().info, th().primary_bg, true),
+                    AgentStatus::Paused => ("■ PAUSED", th().text_sub, th().element_hi, false),
+                    AgentStatus::Adapting => ("◈ ADAPTING", th().secondary, th().secondary_bg, true),
+                    AgentStatus::Success => ("✓ PASSED", th().success, th().success_bg, true),
+                    AgentStatus::Failed => ("✗ ALERT", th().destructive, th().destructive_bg, true),
                 }
             };
 
@@ -156,13 +157,13 @@ impl NodeContent for AgentNodeContent {
                 line_spans.push(Span::raw(" "));
                 line_spans.push(Span::styled(
                     format!(" !{} VULN ", self.findings_count),
-                    Style::default().fg(Color::White).bg(Color::Rgb(190, 40, 40)).add_modifier(Modifier::BOLD),
+                    Style::default().fg(th().fg).bg(th().destructive).add_modifier(Modifier::BOLD),
                 ));
             } else if self.status == AgentStatus::Success {
                 line_spans.push(Span::raw(" "));
                 line_spans.push(Span::styled(
                     " ✓ CLEAN ",
-                    Style::default().fg(Color::Rgb(100, 220, 140)).bg(Color::Rgb(20, 45, 32)),
+                    Style::default().fg(th().success).bg(th().element),
                 ));
             }
 
@@ -554,11 +555,11 @@ fn create_step_edge(
     };
 
     let stroke_color = if is_animating {
-        Color::Rgb(100, 220, 255)
+        th().info
     } else if is_success {
-        Color::Rgb(90, 200, 140)
+        th().success
     } else {
-        Color::Rgb(65, 70, 85)
+        th().border
     };
 
     let style = EdgeStyle::default()

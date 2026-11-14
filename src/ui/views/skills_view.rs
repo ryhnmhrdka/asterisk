@@ -113,13 +113,13 @@ impl SkillsView {
             .style(Style::default().bg(th().bg))
             .title(Line::from(vec![
                 Span::styled(
-                    " [autonomous agent capabilities & skills] ",
+                    " ⚡ Autonomous Agent Capabilities & Skills ",
                     Style::default().fg(th().primary).add_modifier(Modifier::BOLD),
                 ),
             ]))
             .title_bottom(Line::from(vec![
                 Span::styled(
-                    " [↑/↓ / j/k] Navigate  •  [/] Filter  •  [Enter] Toggle Active  •  [Esc] Clear ",
+                    " [↑↓/jk] Navigate  •  [/] Filter  •  [Enter] Toggle Active  •  [Esc] Clear ",
                     Style::default().fg(th().border_hi),
                 ),
             ]));

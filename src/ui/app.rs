@@ -23,9 +23,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use rataflow::{Flow, FlowEvent, StepEdge};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Paragraph},
+    widgets::{Block, BorderType, Borders, Paragraph},
     Frame,
 };
 use std::collections::{HashMap, HashSet};
@@ -52,6 +52,7 @@ pub enum ActiveModal {
     ApiKeyInput,
     ConfigDashboard,
     SelectTheme,
+    Help,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +139,7 @@ pub struct App {
     pub selected_skill_index: usize,
     pub theme_picker_index: usize,
     pub theme_before_picker: String,
+    pub findings_filter_reachable: bool,
 }
 
 impl App {
@@ -212,7 +214,13 @@ impl App {
             selected_skill_index: 0,
             theme_picker_index: 0,
             theme_before_picker: String::new(),
+            findings_filter_reachable: false,
         }
+    }
+
+    pub fn open_help_modal(&mut self) {
+        self.show_key_modal = true;
+        self.active_modal = ActiveModal::Help;
     }
 
     pub fn open_provider_modal(&mut self) {
@@ -844,6 +852,11 @@ impl App {
                 self.theme_picker_apply();
                 true
             }
+            ActiveModal::Help => {
+                self.show_key_modal = false;
+                self.active_modal = ActiveModal::None;
+                true
+            }
             ActiveModal::None => {
                 self.show_key_modal = false;
                 true
@@ -861,10 +874,22 @@ impl App {
             ActiveModal::BaseUrlInput => self.handle_url_input_key(key),
             ActiveModal::ConfigDashboard => self.handle_config_dashboard_key(key),
             ActiveModal::SelectTheme => self.handle_theme_key(key),
+            ActiveModal::Help => self.handle_help_key(key),
             ActiveModal::None => {
                 self.show_key_modal = false;
                 false
             }
+        }
+    }
+
+    fn handle_help_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') => {
+                self.show_key_modal = false;
+                self.active_modal = ActiveModal::None;
+                false
+            }
+            _ => false,
         }
     }
 
@@ -1351,6 +1376,44 @@ impl App {
             KeyCode::Tab => {
                 self.current_tab = (self.current_tab + 1) % 5;
             }
+            KeyCode::BackTab => {
+                self.focused_pane = match self.focused_pane {
+                    FocusedPane::Chatbot => FocusedPane::Workflow,
+                    FocusedPane::Workflow => FocusedPane::Chatbot,
+                };
+                self.action_msg = Some(match self.focused_pane {
+                    FocusedPane::Chatbot => "focused left pane: chatbot".to_string(),
+                    FocusedPane::Workflow => "focused right pane: workflow".to_string(),
+                });
+            }
+            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.focused_pane = match self.focused_pane {
+                    FocusedPane::Chatbot => FocusedPane::Workflow,
+                    FocusedPane::Workflow => FocusedPane::Chatbot,
+                };
+                self.action_msg = Some(match self.focused_pane {
+                    FocusedPane::Chatbot => "focused left pane: chatbot".to_string(),
+                    FocusedPane::Workflow => "focused right pane: workflow".to_string(),
+                });
+            }
+            KeyCode::PageUp => {
+                self.chat_scroll = self.chat_scroll.saturating_add(5);
+            }
+            KeyCode::PageDown => {
+                self.chat_scroll = self.chat_scroll.saturating_sub(5);
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.chat_scroll = self.chat_scroll.saturating_add(5);
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.chat_scroll = self.chat_scroll.saturating_sub(5);
+            }
+            KeyCode::Left if self.focused_pane == FocusedPane::Workflow => {
+                self.current_tab = if self.current_tab == 0 { 4 } else { self.current_tab - 1 };
+            }
+            KeyCode::Right if self.focused_pane == FocusedPane::Workflow => {
+                self.current_tab = (self.current_tab + 1) % 5;
+            }
             KeyCode::F(1) => self.current_tab = 0,
             KeyCode::F(2) => self.current_tab = 1,
             KeyCode::F(3) => self.current_tab = 2,
@@ -1417,7 +1480,9 @@ impl App {
                 }
             }
             KeyCode::Up => {
-                if self.current_tab == 1 && self.selected_matrix_row > 0 {
+                if self.focused_pane == FocusedPane::Chatbot && self.prompt_input.is_empty() {
+                    self.chat_scroll = self.chat_scroll.saturating_add(2);
+                } else if self.current_tab == 1 && self.selected_matrix_row > 0 {
                     self.selected_matrix_row -= 1;
                 } else if self.current_tab == 2 && self.selected_patch_row > 0 {
                     self.selected_patch_row -= 1;
@@ -1426,7 +1491,9 @@ impl App {
                 }
             }
             KeyCode::Down => {
-                if self.current_tab == 1 && self.selected_matrix_row + 1 < self.findings.len() {
+                if self.focused_pane == FocusedPane::Chatbot && self.prompt_input.is_empty() {
+                    self.chat_scroll = self.chat_scroll.saturating_sub(2);
+                } else if self.current_tab == 1 && self.selected_matrix_row + 1 < self.findings.len() {
                     self.selected_matrix_row += 1;
                 } else if self.current_tab == 2 && self.selected_patch_row + 1 < self.patches.len() {
                     self.selected_patch_row += 1;
@@ -1436,6 +1503,62 @@ impl App {
             }
             KeyCode::Char('/') if self.current_tab == 4 && self.prompt_input.is_empty() => {
                 self.skills_search_active = true;
+                return false;
+            }
+            KeyCode::Char('?')
+                if self.prompt_input.is_empty()
+                    || self.focused_pane == FocusedPane::Workflow
+                    || key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.open_help_modal();
+                return false;
+            }
+            KeyCode::Char('j') if self.focused_pane == FocusedPane::Workflow => {
+                if self.current_tab == 1 && self.selected_matrix_row + 1 < self.findings.len() {
+                    self.selected_matrix_row += 1;
+                } else if self.current_tab == 2 && self.selected_patch_row + 1 < self.patches.len() {
+                    self.selected_patch_row += 1;
+                } else if self.current_tab == 4 && self.selected_skill_index + 1 < self.skills.skills.len() {
+                    self.selected_skill_index += 1;
+                }
+                return false;
+            }
+            KeyCode::Char('k') if self.focused_pane == FocusedPane::Workflow => {
+                if self.current_tab == 1 && self.selected_matrix_row > 0 {
+                    self.selected_matrix_row -= 1;
+                } else if self.current_tab == 2 && self.selected_patch_row > 0 {
+                    self.selected_patch_row -= 1;
+                } else if self.current_tab == 4 && self.selected_skill_index > 0 {
+                    self.selected_skill_index -= 1;
+                }
+                return false;
+            }
+            KeyCode::Char('r') if self.focused_pane == FocusedPane::Workflow && self.current_tab == 1 => {
+                self.findings_filter_reachable = !self.findings_filter_reachable;
+                self.selected_matrix_row = 0;
+                self.action_msg = Some(if self.findings_filter_reachable {
+                    "filter: showing reachable findings only".to_string()
+                } else {
+                    "filter: showing all findings".to_string()
+                });
+                return false;
+            }
+            KeyCode::Char('a') if self.focused_pane == FocusedPane::Workflow && self.current_tab == 1 => {
+                self.findings_filter_reachable = false;
+                self.selected_matrix_row = 0;
+                self.action_msg = Some("filter: showing all findings".to_string());
+                return false;
+            }
+            KeyCode::Char('a') if self.focused_pane == FocusedPane::Workflow && self.current_tab == 2 => {
+                if !self.patches.is_empty() {
+                    self.apply_current_patch();
+                }
+                return false;
+            }
+            KeyCode::Char('r') if self.focused_pane == FocusedPane::Workflow && self.current_tab == 2 => {
+                if !self.patches.is_empty() {
+                    self.rollback_current_patch();
+                }
                 return false;
             }
             KeyCode::Char(c)
@@ -2214,6 +2337,51 @@ impl App {
 
     pub fn render(&mut self, f: &mut Frame) {
         let area = f.area();
+        const MIN_COLS: u16 = 70;
+        const MIN_ROWS: u16 = 18;
+
+        if area.width < MIN_COLS || area.height < MIN_ROWS {
+            let msg = vec![
+                Line::from(vec![
+                    Span::styled("  ⚠️  Terminal Window Too Small  ", Style::default().fg(th().warning).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled(format!("  Current size: {} × {} cells", area.width, area.height), Style::default().fg(th().text_muted)),
+                ]),
+                Line::from(vec![
+                    Span::styled(format!("  Minimum required: {MIN_COLS} × {MIN_ROWS} cells"), Style::default().fg(th().text_dim)),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("  Please enlarge or maximize your terminal window to continue.", Style::default().fg(th().fg)),
+                ]),
+            ];
+
+            let card_w = 64.min(area.width.saturating_sub(2));
+            let card_h = 7.min(area.height.saturating_sub(2));
+            let x = (area.width.saturating_sub(card_w)) / 2;
+            let y = (area.height.saturating_sub(card_h)) / 2;
+            let box_rect = Rect::new(x, y, card_w, card_h);
+
+            f.render_widget(ratatui::widgets::Clear, area);
+            f.render_widget(
+                Block::default().style(Style::default().bg(th().bg_alt)),
+                area,
+            );
+            f.render_widget(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(th().warning))
+                    .style(Style::default().bg(th().surface)),
+                box_rect,
+            );
+            let inner = Rect::new(box_rect.x + 1, box_rect.y + 1, box_rect.width.saturating_sub(2), box_rect.height.saturating_sub(2));
+            f.render_widget(Paragraph::new(msg), inner);
+            return;
+        }
+
         self.render_workspace(f, area);
 
         if self.show_key_modal {
@@ -2309,6 +2477,10 @@ impl App {
                         self.key_modal_error.as_deref(),
                     )
                 }
+                ActiveModal::Help => {
+                    ModalView::render_help_modal(f, area);
+                    ModalClickTargets::default()
+                }
                 ActiveModal::None => crate::ui::views::modal_view::ModalClickTargets {
                     provider_buttons: Vec::new(),
                     model_preset_buttons: Vec::new(),
@@ -2341,30 +2513,34 @@ impl App {
         let header_block = Block::default().style(Style::default().bg(th().surface));
         f.render_widget(header_block, root_chunks[0]);
 
+        let spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let spinner_idx = (self.last_flow_tick.elapsed().as_millis() / 80) as usize % spinner_frames.len();
+        let spinner_char = spinner_frames[spinner_idx];
+
         let status_badge = if self.awaiting_confirmation {
-            Span::styled(" ● awaiting confirmation ", Style::default().fg(th().warning).bg(th().element).add_modifier(Modifier::BOLD))
+            Span::styled(" ● AWAITING REVIEW ", Style::default().fg(th().warning).bg(th().element).add_modifier(Modifier::BOLD))
         } else if self.is_running {
-            Span::styled(" ● scanning ", Style::default().fg(th().primary).bg(th().element).add_modifier(Modifier::BOLD))
+            Span::styled(format!(" {spinner_char} SCANNING "), Style::default().fg(th().primary).bg(th().element).add_modifier(Modifier::BOLD))
         } else {
-            Span::styled(" ● ready ", Style::default().fg(th().success).bg(th().element))
+            Span::styled(" ● READY ", Style::default().fg(th().success).bg(th().element))
         };
 
         let unpatched_count = self.findings.iter().filter(|x| !x.patched).count();
         let findings_pill = if unpatched_count > 0 {
-            Span::styled(format!(" {unpatched_count} unresolved "), Style::default().fg(th().destructive).bg(th().element).add_modifier(Modifier::BOLD))
+            Span::styled(format!(" ⚠️ {unpatched_count} unresolved "), Style::default().fg(Color::Rgb(255, 255, 255)).bg(th().destructive).add_modifier(Modifier::BOLD))
         } else {
-            Span::styled(" 0 findings ", Style::default().fg(th().text_muted).bg(th().element))
+            Span::styled(" ✓ 0 issues ", Style::default().fg(th().success).bg(th().element))
         };
 
         // Adaptive header: path takes whatever room is left; low-priority pills drop first.
-        let files_txt = format!(" {} files ", self.profile.total_files);
-        let patches_txt = format!(" {} patches ", self.patches.len());
-        let prov_txt = format!(" {} ", self.active_provider.name());
+        let files_txt = format!(" 📁 {} files ", self.profile.total_files);
+        let patches_txt = format!(" 🩹 {} patches ", self.patches.len());
+        let prov_txt = format!(" 🤖 {} ", self.active_provider.name());
         let find_txt = findings_pill.content.to_string();
         let badge_txt = status_badge.content.to_string();
         let total_w = area.width as usize;
         let w = |t: &str| crate::ui::fit::text_width(t);
-        let fixed_core = 1 + w(" asterisk ") + 2 + w(&prov_txt) + 2 + w(&badge_txt) + 2 + w(&find_txt);
+        let fixed_core = 1 + w(" ✻ asterisk ") + 2 + w(&prov_txt) + 2 + w(&badge_txt) + 2 + w(&find_txt);
         let mut show_files = true;
         let mut show_patches = true;
         let extra = |sf: bool, sp: bool| (if sf { 2 + w(&files_txt) } else { 0 }) + (if sp { 2 + w(&patches_txt) } else { 0 });
@@ -2381,7 +2557,7 @@ impl App {
 
         let mut header_spans = vec![
             Span::raw(" "),
-            Span::styled(" asterisk ", Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD)),
+            Span::styled(" ✻ asterisk ", Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD)),
             Span::raw("  "),
             Span::styled(format!(" {dir_txt} "), Style::default().fg(th().text_sub).bg(th().element)),
         ];
@@ -2402,12 +2578,13 @@ impl App {
         let top_header = Line::from(header_spans);
         f.render_widget(Paragraph::new(top_header), root_chunks[0]);
 
-        // Main Horizontal Split: 50% Left Chatbot vs 50% Right Workspace Area
+        // Master-Detail Layout: 45% Left Chatbot vs 55% Right Workspace Area (generous reading & workspace room)
+        let sidebar_width = ((root_chunks[1].width as usize * 45) / 100).clamp(42, 74) as u16;
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(50),
-                Constraint::Percentage(50),
+                Constraint::Length(sidebar_width.min(root_chunks[1].width.saturating_sub(44))),
+                Constraint::Min(44),
             ])
             .split(root_chunks[1]);
 
@@ -2416,6 +2593,7 @@ impl App {
 
         // Left Sidebar Chatbot
         let sel_node = self.selected_node_id.as_ref().and_then(|id| self.nodes_info.get(id));
+        let is_chatbot_focused = self.focused_pane == FocusedPane::Chatbot;
         let sidebar_targets = SidebarView::render(
             f,
             main_chunks[0],
@@ -2428,6 +2606,7 @@ impl App {
             self.awaiting_confirmation,
             &self.expanded_messages,
             !self.patches.is_empty(),
+            is_chatbot_focused,
         );
         self.click_targets.sidebar = Some(sidebar_targets);
 
@@ -2450,8 +2629,8 @@ impl App {
         let patches_count = self.patches.len();
         let tabs_info = [
             (0, " 1 Flow ".to_string()),
-            (1, format!(" 2 Findings ({findings_count}) ")),
-            (2, format!(" 3 Patches ({patches_count}) ")),
+            (1, if findings_count > 0 { format!(" 2 Findings ({findings_count}) ") } else { " 2 Findings ".to_string() }),
+            (2, if patches_count > 0 { format!(" 3 Patches ({patches_count}) ") } else { " 3 Patches ".to_string() }),
             (3, " 4 Exec ".to_string()),
             (4, " 5 Skills ".to_string()),
         ];
@@ -2505,7 +2684,7 @@ impl App {
         match self.current_tab {
             0 => GraphView::render(f, content_area, &mut self.flow, self.nodes_info.is_empty()),
             1 => {
-                let table_rect = MatrixView::render(f, content_area, &self.findings, self.selected_matrix_row);
+                let table_rect = MatrixView::render(f, content_area, &self.findings, self.selected_matrix_row, self.findings_filter_reachable);
                 self.click_targets.findings_table = Some(table_rect);
             }
             2 => {

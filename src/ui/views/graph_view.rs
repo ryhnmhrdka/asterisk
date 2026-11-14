@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
     Frame,
 };
 
@@ -18,31 +18,52 @@ impl GraphView {
     pub fn render(f: &mut Frame, area: Rect, flow: &mut Flow<AgentNodeContent, StepEdge>, is_idle: bool) {
         if is_idle {
             let empty_block = Block::default()
-                .style(Style::default().bg(th().bg));
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(th().element))
+                .style(Style::default().bg(th().surface));
+            let inner = empty_block.inner(area);
+            f.render_widget(empty_block, area);
 
             let empty_msg = vec![
-                Line::from(""),
-                Line::from(""),
-                Line::from(""),
+                Line::raw(""),
                 Line::from(vec![
-                    Span::styled(" [●] ", Style::default().fg(th().primary)),
-                    Span::styled("Autonomous Workspace Defense Idle", Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
+                    Span::styled("   ✻ Asterisk Autonomous Defense Pipeline", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::raw("   "),
+                    Span::styled(" ● STANDBY ", Style::default().fg(th().success).bg(th().element).add_modifier(Modifier::BOLD)),
                 ]),
-                Line::from(""),
-                Line::from(Span::styled("No active autonomous defense workflow or security audit currently executing.", Style::default().fg(th().text_muted))),
-                Line::from(""),
+                Line::raw(""),
                 Line::from(vec![
-                    Span::styled("Press ", Style::default().fg(th().text_muted)),
-                    Span::styled(" [Space] ", Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD)),
-                    Span::styled(" or enter ", Style::default().fg(th().text_muted)),
-                    Span::styled(" /audit ", Style::default().fg(th().primary).bg(th().element).add_modifier(Modifier::BOLD)),
-                    Span::styled(" in the CLI prompt to synthesize AST DAG and start security orchestration.", Style::default().fg(th().text_muted)),
+                    Span::styled("   Autonomous multi-agent orchestration harness is idle and ready for dispatch.", Style::default().fg(th().fg)),
+                ]),
+                Line::from(vec![
+                    Span::styled("   When triggered, real-time AST dataflows, taint graphs, and subagents stream live here.", Style::default().fg(th().text_sub)),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("   Action commands:", Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(vec![
+                    Span::styled("   • Press ", Style::default().fg(th().text_sub)),
+                    Span::styled("[Space]", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(" or enter ", Style::default().fg(th().text_sub)),
+                    Span::styled("/scan", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(" to synthesize AST DAG and start security orchestration.", Style::default().fg(th().text_sub)),
+                ]),
+                Line::from(vec![
+                    Span::styled("   • Press ", Style::default().fg(th().text_sub)),
+                    Span::styled("[Tab]", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(" or ", Style::default().fg(th().text_sub)),
+                    Span::styled("[Alt+1..5]", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(" to explore findings, patches, execution traces, and custom skills.", Style::default().fg(th().text_sub)),
+                ]),
+                Line::from(vec![
+                    Span::styled("   • Press ", Style::default().fg(th().text_sub)),
+                    Span::styled("[?]", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(" to open the interactive keyboard cheat sheet anytime.", Style::default().fg(th().text_sub)),
                 ]),
             ];
-            let p = Paragraph::new(empty_msg)
-                .block(empty_block)
-                .alignment(ratatui::layout::Alignment::Center);
-            f.render_widget(p, area);
+            f.render_widget(Paragraph::new(empty_msg), inner);
             return;
         }
 
@@ -83,7 +104,7 @@ impl GraphView {
             .border_style(Style::default().fg(th().border))
             .style(Style::default().bg(th().surface))
             .title(Line::from(vec![
-                Span::styled(" [controls] ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" ⌥ Controls ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
             ]));
 
         let controls = Controls::new(flow)
@@ -104,7 +125,7 @@ impl GraphView {
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(th().border))
             .title(Line::from(vec![
-                Span::styled(" [radar] ", Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
+                Span::styled(" ⌖ Radar ", Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
             ]));
 
         let minimap = MiniMap::new(flow)
@@ -114,32 +135,32 @@ impl GraphView {
             .block(minimap_block);
         f.render_widget(minimap, canvas_area);
 
-        // 2. Styled rounded block with balanced layout and explicit shortcut guide
+        // 2. Styled rounded block with balanced layout and sleek modern guide
         let legend_area = chunks[1];
         let legend_block = Block::bordered()
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(th().border))
             .style(Style::default().bg(th().bg))
             .title(Line::from(vec![
-                Span::styled(" [flow legend & architecture guide] ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" ◈ Architecture & Autonomous Flow Guide ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
             ]));
 
         let legend_text = vec![
             Line::from(vec![
                 Span::styled("  ROLES:  ", Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
-                Span::styled("[#] orch", Style::default().fg(th().primary)),
+                Span::styled("◈ Orch", Style::default().fg(th().primary)),
                 Span::styled("  •  ", Style::default().fg(th().border)),
-                Span::styled("[/] dir", Style::default().fg(th().text_sub)),
+                Span::styled("📁 Dir", Style::default().fg(th().text_sub)),
                 Span::styled("  •  ", Style::default().fg(th().border)),
-                Span::styled("[.] file", Style::default().fg(th().text_sub)),
+                Span::styled("📄 File", Style::default().fg(th().text_sub)),
                 Span::styled("  •  ", Style::default().fg(th().border)),
-                Span::styled("[>] subagent", Style::default().fg(th().primary)),
+                Span::styled("⚡ Subagent", Style::default().fg(th().primary)),
                 Span::styled("  •  ", Style::default().fg(th().border)),
-                Span::styled("[!] remedy", Style::default().fg(th().destructive)),
+                Span::styled("🛡 Remedy", Style::default().fg(th().destructive)),
                 Span::styled("  •  ", Style::default().fg(th().border)),
-                Span::styled("[✓] verify", Style::default().fg(th().success)),
+                Span::styled("✓ Verifier", Style::default().fg(th().success)),
                 Span::styled("  •  ", Style::default().fg(th().border)),
-                Span::styled("[#] gate", Style::default().fg(th().warning)),
+                Span::styled("⚖ Gate", Style::default().fg(th().warning)),
             ]),
             Line::from(vec![
                 Span::styled("  STATES: ", Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
@@ -147,11 +168,11 @@ impl GraphView {
                 Span::styled("  •  ", Style::default().fg(th().border)),
                 Span::styled("○ idle", Style::default().fg(th().text_muted)),
                 Span::styled("  •  ", Style::default().fg(th().border)),
-                Span::styled("✓ passed", Style::default().fg(th().success)),
+                Span::styled("✓ clean", Style::default().fg(th().success)),
                 Span::styled("  •  ", Style::default().fg(th().border)),
-                Span::styled("! vuln alert", Style::default().fg(th().destructive)),
+                Span::styled("✕ vuln alert", Style::default().fg(th().destructive)),
                 Span::styled("  •  ", Style::default().fg(th().border)),
-                Span::styled("■ paused", Style::default().fg(th().warning)),
+                Span::styled("⏸ paused", Style::default().fg(th().warning)),
             ]),
             Line::from(vec![
                 Span::styled("  CANVAS: ", Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),

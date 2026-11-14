@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph},
     Frame,
 };
 use std::collections::HashSet;
@@ -36,6 +36,7 @@ impl SidebarView {
         awaiting_confirmation: bool,
         expanded_messages: &HashSet<usize>,
         has_patches: bool,
+        is_focused: bool,
     ) -> SidebarClickTargets {
         let est_input_width = area.width;
         let wrap_width = (est_input_width.saturating_sub(6) as usize).max(10);
@@ -44,18 +45,16 @@ impl SidebarView {
             if awaiting_confirmation {
                 vec![
                     Line::from(vec![
-                        Span::styled(" > ", Style::default().fg(th().warning).add_modifier(Modifier::BOLD)),
-                        Span::styled("click [Execute] or type 'y'... ", Style::default().fg(th().text_dim)),
+                        Span::styled(" ❯ ", Style::default().fg(th().warning).add_modifier(Modifier::BOLD)),
+                        Span::styled("type 'y' to confirm or [Enter]... ", Style::default().fg(th().text_dim)),
                     ]),
-                    Line::raw(""),
                 ]
             } else {
                 vec![
                     Line::from(vec![
-                        Span::styled(" > ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
-                        Span::styled("type instructions or slash commands... ", Style::default().fg(th().text_dim)),
+                        Span::styled(" ❯ ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                        Span::styled("ask a question or type /scan... ", Style::default().fg(th().text_dim)),
                     ]),
-                    Line::raw(""),
                 ]
             }
         } else {
@@ -64,23 +63,22 @@ impl SidebarView {
             let mut lines = Vec::new();
             for (i, line_text) in wrapped.iter().enumerate() {
                 let is_last = i == total_wrapped - 1;
-                let prefix = if i == 0 { " > " } else { "   " };
+                let prefix = if i == 0 { " ❯ " } else { "   " };
                 let mut spans = vec![
-                    Span::styled(prefix, Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
+                    Span::styled(prefix, Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
                     Span::styled(line_text.clone(), Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
                 ];
                 if is_last {
-                    spans.push(Span::styled("█", Style::default().fg(th().fg)));
+                    spans.push(Span::styled("█", Style::default().fg(th().primary)));
                 }
                 lines.push(Line::from(spans));
             }
-            lines.push(Line::raw(""));
             lines
         };
 
         let num_lines = display_lines.len();
         let max_box_height = 6;
-        let input_box_height = (num_lines as u16).clamp(3, max_box_height);
+        let input_box_height = ((num_lines + 2) as u16).clamp(3, max_box_height);
         let prompt_section_height = input_box_height + 1; // +1 for subtitle hint line
 
         let has_inspector = selected_node.is_some();
@@ -104,11 +102,16 @@ impl SidebarView {
             suggestion_rows: Vec::new(),
         };
 
-        // Deep obsidian filled sidebar with single quiet right border
+        // Deep obsidian filled sidebar with responsive focus border
+        let sidebar_border_style = if is_focused {
+            Style::default().fg(th().ring)
+        } else {
+            Style::default().fg(th().element)
+        };
         let sidebar_bg = Block::default()
             .borders(Borders::RIGHT)
             .border_type(BorderType::Plain)
-            .border_style(Style::default().fg(th().element))
+            .border_style(sidebar_border_style)
             .style(Style::default().bg(th().surface));
         f.render_widget(sidebar_bg, area);
 
@@ -119,26 +122,76 @@ impl SidebarView {
         let max_text_width = (chunks[0].width.saturating_sub(4)) as usize;
         let mut all_chat_lines: Vec<(Line, Option<usize>)> = Vec::new();
 
+        if chat_messages.is_empty() {
+            all_chat_lines.push((Line::raw(""), None));
+            all_chat_lines.push((
+                Line::from(vec![
+                    Span::styled("  ✻ Asterisk Defense Assistant", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                ]),
+                None,
+            ));
+            all_chat_lines.push((
+                Line::from(vec![
+                    Span::styled("    Autonomous pre-production security & triage", Style::default().fg(th().text_muted)),
+                ]),
+                None,
+            ));
+            all_chat_lines.push((Line::raw(""), None));
+            all_chat_lines.push((
+                Line::from(vec![
+                    Span::styled("    Quick commands:", Style::default().fg(th().text_dim).add_modifier(Modifier::BOLD)),
+                ]),
+                None,
+            ));
+            all_chat_lines.push((
+                Line::from(vec![
+                    Span::styled("    /scan      ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled("Run SAST & secret audit", Style::default().fg(th().text_sub)),
+                ]),
+                None,
+            ));
+            all_chat_lines.push((
+                Line::from(vec![
+                    Span::styled("    /provider  ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled("Configure AI models & keys", Style::default().fg(th().text_sub)),
+                ]),
+                None,
+            ));
+            all_chat_lines.push((
+                Line::from(vec![
+                    Span::styled("    /help      ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled("Display command reference", Style::default().fg(th().text_sub)),
+                ]),
+                None,
+            ));
+            all_chat_lines.push((
+                Line::from(vec![
+                    Span::styled("    ?          ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled("Open keyboard cheat sheet", Style::default().fg(th().text_sub)),
+                ]),
+                None,
+            ));
+            all_chat_lines.push((Line::raw(""), None));
+        }
+
         for (actual_idx, msg) in chat_messages.iter().enumerate() {
             match msg {
                 ChatMessage::User(text) => {
-                    let user_style = Style::default().bg(th().element);
-
                     all_chat_lines.push((
                         Line::from(vec![
-                            Span::styled("  You:", user_style.fg(th().primary).add_modifier(Modifier::BOLD)),
+                            Span::styled("  ▸ You:", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
                         ]),
                         None,
                     ));
 
-                    let wrapped = wrap_multiline(text, max_text_width);
+                    let wrapped = wrap_text_with_indent(text, "    ", max_text_width);
                     let is_expanded = expanded_messages.contains(&actual_idx);
 
                     if wrapped.len() <= 3 || is_expanded {
                         for l in &wrapped {
                             all_chat_lines.push((
                                 Line::from(vec![
-                                    Span::styled(format!("  {l}"), user_style.fg(th().fg)),
+                                    Span::styled(l.clone(), Style::default().fg(th().fg)),
                                 ]),
                                 None,
                             ));
@@ -146,7 +199,7 @@ impl SidebarView {
                         if is_expanded && wrapped.len() > 3 {
                             all_chat_lines.push((
                                 Line::from(vec![
-                                    Span::styled("  ▲ [collapse]", user_style.fg(th().primary).add_modifier(Modifier::BOLD)),
+                                    Span::styled("    ▲ [collapse]", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
                                 ]),
                                 Some(actual_idx),
                             ));
@@ -155,139 +208,117 @@ impl SidebarView {
                         for l in &wrapped[..2] {
                             all_chat_lines.push((
                                 Line::from(vec![
-                                    Span::styled(format!("  {l}"), user_style.fg(th().fg)),
+                                    Span::styled(l.clone(), Style::default().fg(th().fg)),
                                 ]),
                                 None,
                             ));
                         }
-                        let last_line = format!("  {} ... [click to expand]", &wrapped[2]);
+                        let last_line = format!("    {} ... [click to expand]", wrapped[2].trim_start());
                         all_chat_lines.push((
                             Line::from(vec![
-                                Span::styled(last_line, user_style.fg(th().primary).add_modifier(Modifier::BOLD)),
+                                Span::styled(last_line, Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
                             ]),
                             Some(actual_idx),
                         ));
                     }
                 }
                 ChatMessage::Thinking { agent, thought } => {
-                    let wrapped = wrap_multiline(thought, max_text_width.saturating_sub(agent.len() + 8).max(10));
-                    for (i, l) in wrapped.into_iter().enumerate() {
-                        if i == 0 {
-                            all_chat_lines.push((
-                                Line::from(vec![
-                                    Span::styled("  ⠋ ", Style::default().fg(th().text_muted)),
-                                    Span::styled(format!("[{agent}]: "), Style::default().fg(th().text_muted)),
-                                    Span::styled(l, Style::default().fg(th().text_sub).add_modifier(Modifier::ITALIC)),
-                                ]),
-                                None,
-                            ));
-                        } else {
-                            all_chat_lines.push((
-                                Line::from(vec![
-                                    Span::raw("    "),
-                                    Span::styled(l, Style::default().fg(th().text_sub).add_modifier(Modifier::ITALIC)),
-                                ]),
-                                None,
-                            ));
-                        }
+                    all_chat_lines.push((
+                        Line::from(vec![
+                            Span::styled("  💭 ", Style::default().fg(th().text_muted)),
+                            Span::styled(format!("{agent} thinking:"), Style::default().fg(th().text_dim).add_modifier(Modifier::BOLD)),
+                        ]),
+                        None,
+                    ));
+                    let wrapped = wrap_text_with_indent(thought, "     ", max_text_width);
+                    for l in wrapped {
+                        all_chat_lines.push((
+                            Line::from(vec![
+                                Span::styled(l, Style::default().fg(th().text_sub).add_modifier(Modifier::ITALIC)),
+                            ]),
+                            None,
+                        ));
                     }
                 }
                 ChatMessage::ToolCall { tool, input, .. } => {
-                    let wrapped = wrap_multiline(input, max_text_width.saturating_sub(tool.len() + 12).max(10));
-                    for (i, l) in wrapped.into_iter().enumerate() {
-                        if i == 0 {
-                            all_chat_lines.push((
-                                Line::from(vec![
-                                    Span::styled("  ❯ task: ", Style::default().fg(th().text_muted)),
-                                    Span::styled(format!("{tool} "), Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
-                                    Span::styled(format!("({l})"), Style::default().fg(th().text_muted)),
-                                ]),
-                                None,
-                            ));
-                        } else {
-                            all_chat_lines.push((
-                                Line::from(vec![
-                                    Span::raw("    "),
-                                    Span::styled(l, Style::default().fg(th().text_muted)),
-                                ]),
-                                None,
-                            ));
-                        }
+                    all_chat_lines.push((
+                        Line::from(vec![
+                            Span::styled("  ⚡ task: ", Style::default().fg(th().primary)),
+                            Span::styled(tool.to_string(), Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
+                        ]),
+                        None,
+                    ));
+                    let wrapped = wrap_text_with_indent(input, "     ", max_text_width);
+                    for l in wrapped {
+                        all_chat_lines.push((
+                            Line::from(vec![
+                                Span::styled(l, Style::default().fg(th().text_muted)),
+                            ]),
+                            None,
+                        ));
                     }
                 }
                 ChatMessage::ToolResult { output, elapsed_ms, .. } => {
                     let ms_str = elapsed_ms.map(|ms| format!(" ({ms}ms)")).unwrap_or_default();
-                    let wrapped = wrap_multiline(output, max_text_width.saturating_sub(16).max(10));
-                    for (i, l) in wrapped.into_iter().enumerate() {
-                        if i == 0 {
-                            all_chat_lines.push((
-                                Line::from(vec![
-                                    Span::styled("    ✔ result: ", Style::default().fg(th().success)),
-                                    Span::styled(l, Style::default().fg(th().text)),
-                                    Span::styled(ms_str.clone(), Style::default().fg(th().text_dim)),
-                                ]),
-                                None,
-                            ));
-                        } else {
-                            all_chat_lines.push((
-                                Line::from(vec![
-                                    Span::raw("      "),
-                                    Span::styled(l, Style::default().fg(th().text)),
-                                ]),
-                                None,
-                            ));
-                        }
+                    all_chat_lines.push((
+                        Line::from(vec![
+                            Span::styled("  ✓ result", Style::default().fg(th().success).add_modifier(Modifier::BOLD)),
+                            Span::styled(ms_str, Style::default().fg(th().text_dim)),
+                            Span::styled(":", Style::default().fg(th().text_dim)),
+                        ]),
+                        None,
+                    ));
+                    let wrapped = wrap_text_with_indent(output, "     ", max_text_width);
+                    for l in wrapped {
+                        all_chat_lines.push((
+                            Line::from(vec![
+                                Span::styled(l, Style::default().fg(th().text)),
+                            ]),
+                            None,
+                        ));
                     }
                 }
                 ChatMessage::Agent { sender, text } => {
+                    let (icon, role_name, color) = match sender.to_lowercase().as_str() {
+                        "sast-analyzer" | "sast" => ("⚡", "SAST Analyzer", th().warning),
+                        "secret-scanner" | "secret" => ("🔑", "Secret Hunter", th().warning),
+                        "reachability-engine" | "reachability" => ("🎯", "Reachability Verifier", th().info),
+                        "patch-verifier" | "verifier" => ("🛡", "Patch Verifier", th().success),
+                        "orchestrator" => ("✻", "Defense Orchestrator", th().primary),
+                        _ => ("●", sender.as_str(), th().primary),
+                    };
+
                     all_chat_lines.push((
                         Line::from(vec![
-                            Span::styled(format!("  ● {sender}:"), Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                            Span::styled(format!("  {icon} "), Style::default().fg(color)),
+                            Span::styled(format!("{role_name}:"), Style::default().fg(color).add_modifier(Modifier::BOLD)),
                         ]),
                         None,
                     ));
 
                     let parsed = parse_markdown(text);
                     for pl in parsed {
-                        let line_text: String = pl.spans.iter().map(|s| s.content.as_ref()).collect();
-                        if line_text.chars().count() > max_text_width.saturating_sub(4).max(10) {
-                            let wrapped = wrap_multiline(&line_text, max_text_width.saturating_sub(4).max(10));
-                            for wl in wrapped {
-                                all_chat_lines.push((
-                                    Line::from(vec![
-                                        Span::raw("    "),
-                                        Span::styled(wl, Style::default().fg(th().text)),
-                                    ]),
-                                    None,
-                                ));
-                            }
-                        } else {
-                            let mut spans = vec![Span::raw("    ")];
-                            spans.extend(pl.spans);
-                            all_chat_lines.push((Line::from(spans), None));
+                        let wrapped = wrap_spans_to_lines(pl.spans, "  ", max_text_width);
+                        for wl in wrapped {
+                            all_chat_lines.push((wl, None));
                         }
                     }
                 }
                 ChatMessage::System(text) => {
-                    let wrapped = wrap_multiline(text, max_text_width.saturating_sub(14).max(10));
-                    for (i, l) in wrapped.into_iter().enumerate() {
-                        if i == 0 {
-                            all_chat_lines.push((
-                                Line::from(vec![
-                                    Span::styled("  ● system: ", Style::default().fg(th().text_dim)),
-                                    Span::styled(l, Style::default().fg(th().text)),
-                                ]),
-                                None,
-                            ));
-                        } else {
-                            all_chat_lines.push((
-                                Line::from(vec![
-                                    Span::raw("    "),
-                                    Span::styled(l, Style::default().fg(th().text)),
-                                ]),
-                                None,
-                            ));
-                        }
+                    all_chat_lines.push((
+                        Line::from(vec![
+                            Span::styled("  ● system:", Style::default().fg(th().text_dim).add_modifier(Modifier::BOLD)),
+                        ]),
+                        None,
+                    ));
+                    let wrapped = wrap_text_with_indent(text, "    ", max_text_width);
+                    for l in wrapped {
+                        all_chat_lines.push((
+                            Line::from(vec![
+                                Span::styled(l, Style::default().fg(th().text)),
+                            ]),
+                            None,
+                        ));
                     }
                 }
             }
@@ -295,27 +326,15 @@ impl SidebarView {
         }
 
         let visible_height = chunks[0].height as usize;
-        let total_lines = all_chat_lines.len();
-        let max_scroll = total_lines.saturating_sub(visible_height);
+        let total_visual_lines = all_chat_lines.len();
+        let max_scroll = total_visual_lines.saturating_sub(visible_height);
         let effective_scroll = chat_scroll.min(max_scroll);
+        let scroll_top = max_scroll.saturating_sub(effective_scroll) as u16;
 
-        let start_line = max_scroll.saturating_sub(effective_scroll);
-        let end_line = (start_line + visible_height).min(total_lines);
-
-        let mut visible_lines = Vec::new();
-        if total_lines > 0 && start_line < total_lines {
-            for (idx, (line, expand_msg_idx)) in all_chat_lines[start_line..end_line].iter().enumerate() {
-                visible_lines.push(line.clone());
-                if let Some(msg_idx) = expand_msg_idx {
-                    let click_y = chunks[0].y + idx as u16;
-                    targets.user_msg_expand.push((*msg_idx, Rect::new(chunks[0].x, click_y, chunks[0].width, 1)));
-                }
-            }
-        }
-
+        let lines_to_render: Vec<Line> = all_chat_lines.into_iter().map(|(l, _)| l).collect();
         f.render_widget(
-            Paragraph::new(visible_lines)
-                .wrap(Wrap { trim: false })
+            Paragraph::new(lines_to_render)
+                .scroll((scroll_top, 0))
                 .block(chat_block),
             chunks[0],
         );
@@ -426,23 +445,42 @@ impl SidebarView {
 
         let input_rect = prompt_chunks[0];
 
-        let prompt_block = Block::default()
+        let prompt_border_color = if is_focused {
+            th().ring
+        } else {
+            th().element_hi
+        };
+        let prompt_block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(prompt_border_color))
             .style(Style::default().bg(th().element));
 
-        let scroll_y = (num_lines as u16).saturating_sub(input_box_height);
+        let inner_input = prompt_block.inner(input_rect);
+        f.render_widget(prompt_block, input_rect);
+
+        let scroll_y = (num_lines as u16).saturating_sub(inner_input.height);
         let prompt_paragraph = Paragraph::new(display_lines)
-            .scroll((scroll_y, 0))
-            .block(prompt_block);
-        f.render_widget(prompt_paragraph, input_rect);
+            .scroll((scroll_y, 0));
+        f.render_widget(prompt_paragraph, inner_input);
 
         // Subtitle hint row beneath input box
-        let hint_line = hint_line(
-            &[("/", "commands"), ("[Tab]", "complete"), ("[↵]", "send")],
-            prompt_chunks[1].width as usize,
-            Style::default().fg(th().primary),
-            Style::default().fg(th().border_hi),
-            "  •  ",
-        );
+        let hint_line = if is_focused {
+            hint_line(
+                &[("/", "commands"), ("[Tab]", "complete"), ("[Enter]", "send")],
+                prompt_chunks[1].width as usize,
+                Style::default().fg(th().primary),
+                Style::default().fg(th().border_hi),
+                "  •  ",
+            )
+        } else {
+            hint_line(
+                &[("[Shift+Tab]", "focus chat"), ("[Tab]", "views"), ("[Space]", "scan")],
+                prompt_chunks[1].width as usize,
+                Style::default().fg(th().fg),
+                Style::default().fg(th().border_hi),
+                "  •  ",
+            )
+        };
         f.render_widget(Paragraph::new(hint_line), prompt_chunks[1]);
 
         // 5. Command Autocomplete Suggestions Popup (Floats above prompt at bottom)
@@ -525,31 +563,53 @@ fn wrap_multiline(text: &str, max_width: usize) -> Vec<String> {
     if max_width == 0 {
         return vec![text.to_string()];
     }
+    use crate::ui::fit::text_width;
     let mut result = Vec::new();
     for paragraph in text.lines() {
+        if paragraph.trim().is_empty() {
+            result.push(String::new());
+            continue;
+        }
         let mut current = String::new();
+        let mut current_w = 0;
+
         for word in paragraph.split_whitespace() {
-            if word.len() > max_width {
+            let word_w = text_width(word);
+            if word_w > max_width {
                 if !current.is_empty() {
                     result.push(current);
                     current = String::new();
+                    current_w = 0;
                 }
-                let mut rem = word;
-                while rem.len() > max_width {
-                    result.push(rem[..max_width].to_string());
-                    rem = &rem[max_width..];
+                let mut chunk = String::new();
+                let mut chunk_w = 0;
+                for ch in word.chars() {
+                    let mut buf = [0; 4];
+                    let ch_s = ch.encode_utf8(&mut buf);
+                    let cw = text_width(ch_s);
+                    if chunk_w + cw > max_width && !chunk.is_empty() {
+                        result.push(chunk);
+                        chunk = String::new();
+                        chunk_w = 0;
+                    }
+                    chunk.push(ch);
+                    chunk_w += cw;
                 }
-                if !rem.is_empty() {
-                    current = rem.to_string();
+                if !chunk.is_empty() {
+                    current = chunk;
+                    current_w = chunk_w;
                 }
             } else if current.is_empty() {
                 current.push_str(word);
-            } else if current.len() + 1 + word.len() <= max_width {
+                current_w = word_w;
+            } else if current_w + 1 + word_w <= max_width {
                 current.push(' ');
                 current.push_str(word);
+                current_w += 1 + word_w;
             } else {
                 result.push(current);
                 current = word.to_string();
+                current_w = word_w;
             }
         }
         if !current.is_empty() {
@@ -559,5 +619,121 @@ fn wrap_multiline(text: &str, max_width: usize) -> Vec<String> {
     if result.is_empty() {
         result.push(String::new());
     }
+    result
+}
+
+fn wrap_text_with_indent(text: &str, indent: &'static str, max_width: usize) -> Vec<String> {
+    use crate::ui::fit::text_width;
+    let indent_w = text_width(indent);
+    let usable_w = max_width.saturating_sub(indent_w).max(12);
+    let mut result = Vec::new();
+
+    for paragraph in text.lines() {
+        let trimmed = paragraph.trim();
+        if trimmed.is_empty() {
+            result.push(String::new());
+            continue;
+        }
+
+        let mut current = String::new();
+        let mut current_w = 0;
+
+        for word in trimmed.split_whitespace() {
+            let word_w = text_width(word);
+            let space_needed = if current.is_empty() { 0 } else { 1 };
+
+            if current_w + word_w + space_needed > usable_w && !current.is_empty() {
+                result.push(format!("{indent}{current}"));
+                current = word.to_string();
+                current_w = word_w;
+            } else {
+                if !current.is_empty() {
+                    current.push(' ');
+                    current_w += 1;
+                }
+                current.push_str(word);
+                current_w += word_w;
+            }
+        }
+
+        if !current.is_empty() {
+            result.push(format!("{indent}{current}"));
+        }
+    }
+
+    if result.is_empty() {
+        result.push(format!("{indent}{text}"));
+    }
+
+    result
+}
+
+fn wrap_spans_to_lines(
+    spans: Vec<Span<'static>>,
+    indent: &'static str,
+    max_width: usize,
+) -> Vec<Line<'static>> {
+    use crate::ui::fit::text_width;
+    let indent_w = text_width(indent);
+    let usable_w = max_width.saturating_sub(indent_w).max(12);
+
+    let mut result: Vec<Line<'static>> = Vec::new();
+    let mut current_line: Vec<Span<'static>> = Vec::new();
+    let mut current_w = 0;
+
+    current_line.push(Span::raw(indent));
+
+    for span in spans {
+        let style = span.style;
+        let text = span.content.to_string();
+        if text.is_empty() {
+            continue;
+        }
+
+        for (line_idx, line_str) in text.lines().enumerate() {
+            if line_idx > 0 {
+                result.push(Line::from(std::mem::take(&mut current_line)));
+                current_line.push(Span::raw(indent));
+                current_w = 0;
+            }
+
+            let words: Vec<&str> = line_str.split(' ').collect();
+            for (w_idx, word) in words.iter().enumerate() {
+                if word.is_empty() {
+                    if w_idx > 0 && current_w + 1 <= usable_w {
+                        current_line.push(Span::styled(" ", style));
+                        current_w += 1;
+                    }
+                    continue;
+                }
+
+                let word_w = text_width(word);
+                let space = if w_idx > 0 { 1 } else { 0 };
+
+                if current_w + word_w + space > usable_w && current_w > 0 {
+                    result.push(Line::from(std::mem::take(&mut current_line)));
+                    current_line.push(Span::raw(indent));
+                    current_line.push(Span::styled(word.to_string(), style));
+                    current_w = word_w;
+                } else {
+                    if space > 0 && current_w > 0 {
+                        current_line.push(Span::styled(" ", style));
+                        current_w += 1;
+                    }
+                    current_line.push(Span::styled(word.to_string(), style));
+                    current_w += word_w;
+                }
+            }
+        }
+    }
+
+    if !current_line.is_empty() && (current_line.len() > 1 || current_w > 0) {
+        result.push(Line::from(current_line));
+    }
+
+    if result.is_empty() {
+        result.push(Line::from(vec![Span::raw(indent)]));
+    }
+
     result
 }

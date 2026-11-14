@@ -124,6 +124,25 @@ fi
     }
 
     // 4. Interactive TUI Mode (Directly into Flow & Chatbot Workspace)
+    use std::io::IsTerminal;
+    if !std::io::stdout().is_terminal() {
+        eprintln!("asterisk: stdout is not a terminal. Use --ci or run in an interactive terminal.");
+        exit(1);
+    }
+
+    // Install panic hook to always cleanly restore terminal on unhandled panic
+    let default_panic = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            std::io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            crossterm::cursor::Show
+        );
+        default_panic(panic_info);
+    }));
+
     enable_raw_mode()?;
     let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;

@@ -875,4 +875,144 @@ impl ModalView {
 
         targets
     }
+
+    pub fn render_help_modal(f: &mut Frame, area: Rect) {
+        let width = 76.min(area.width.saturating_sub(4));
+        let height = 22.min(area.height.saturating_sub(2));
+        let x = (area.width.saturating_sub(width)) / 2;
+        let y = (area.height.saturating_sub(height)) / 2;
+        let modal_area = Rect::new(x, y, width, height);
+
+        f.render_widget(Clear, modal_area);
+
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(th().ring))
+            .style(Style::default().bg(th().surface))
+            .title(Line::from(vec![
+                Span::styled(" ✻ ASTERISK ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                Span::styled("• Keyboard Shortcuts & Command Guide ", Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
+            ]))
+            .title_bottom(Line::from(vec![
+                Span::styled(" Press ", Style::default().fg(th().text_muted)),
+                Span::styled(" [Esc] ", Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" or ", Style::default().fg(th().text_muted)),
+                Span::styled(" [?] ", Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" to close ", Style::default().fg(th().text_muted)),
+            ]));
+
+        let inner = block.inner(modal_area);
+        f.render_widget(block, modal_area);
+
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(50),
+                Constraint::Percentage(50),
+            ])
+            .split(inner);
+
+        // Left Column: Navigation & Triage
+        let left_lines = vec![
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("  ◈ GLOBAL & NAVIGATION", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("   Shift+Tab ", Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Switch pane (Chat ↔ Views)", Style::default().fg(th().text)),
+            ]),
+            Line::from(vec![
+                Span::styled("   Alt+1..5  ", Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Quick switch tab 1 to 5", Style::default().fg(th().text)),
+            ]),
+            Line::from(vec![
+                Span::styled("   Tab       ", Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Cycle workspace tabs", Style::default().fg(th().text)),
+            ]),
+            Line::from(vec![
+                Span::styled("   Ctrl+T    ", Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Cycle UI themes instantly", Style::default().fg(th().text)),
+            ]),
+            Line::from(vec![
+                Span::styled("   ?         ", Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Toggle this help cheat sheet", Style::default().fg(th().text)),
+            ]),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("  ◈ WORKSPACE & TRIAGE", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("   j / k     ", Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Navigate rows & findings", Style::default().fg(th().text)),
+            ]),
+            Line::from(vec![
+                Span::styled("   r         ", Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Filter reachable findings", Style::default().fg(th().text)),
+            ]),
+            Line::from(vec![
+                Span::styled("   Ctrl+A    ", Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Apply selected patch to disk", Style::default().fg(th().text)),
+            ]),
+            Line::from(vec![
+                Span::styled("   Esc+Esc   ", Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Rewind workspace checkpoint", Style::default().fg(th().text)),
+            ]),
+        ];
+
+        // Right Column: Chat, Terminal & Slash Commands
+        let right_lines = vec![
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("  ◈ CHAT & STREAM SCROLL", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("   PgUp/PgDn ", Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Scroll conversation stream", Style::default().fg(th().text)),
+            ]),
+            Line::from(vec![
+                Span::styled("   Ctrl+U/D  ", Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Half-page chat scroll", Style::default().fg(th().text)),
+            ]),
+            Line::from(vec![
+                Span::styled("   ↑ / ↓     ", Style::default().fg(th().fg).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Scroll chat or recall input", Style::default().fg(th().text)),
+            ]),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("  ◈ SLASH COMMANDS", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("   /scan     ", Style::default().fg(th().primary).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Autonomous defense audit", Style::default().fg(th().text)),
+            ]),
+            Line::from(vec![
+                Span::styled("   /provider ", Style::default().fg(th().primary).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Choose AI provider & key", Style::default().fg(th().text)),
+            ]),
+            Line::from(vec![
+                Span::styled("   /model    ", Style::default().fg(th().primary).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Select model preset", Style::default().fg(th().text)),
+            ]),
+            Line::from(vec![
+                Span::styled("   /theme    ", Style::default().fg(th().primary).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Interactive theme browser", Style::default().fg(th().text)),
+            ]),
+            Line::from(vec![
+                Span::styled("   /skills   ", Style::default().fg(th().primary).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Manage custom security skills", Style::default().fg(th().text)),
+            ]),
+            Line::from(vec![
+                Span::styled("   /config   ", Style::default().fg(th().primary).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Credential & endpoint status", Style::default().fg(th().text)),
+            ]),
+        ];
+
+        f.render_widget(Paragraph::new(left_lines), columns[0]);
+        f.render_widget(Paragraph::new(right_lines), columns[1]);
+    }
 }

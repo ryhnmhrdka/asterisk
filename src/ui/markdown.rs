@@ -40,13 +40,37 @@ pub fn parse_markdown(input: &str) -> Vec<Line<'static>> {
     let mut heading_level: Option<usize> = None;
     let mut list_index: Option<u64> = None;
     let mut in_blockquote = false;
+    let mut in_table = false;
+    let mut in_table_head = false;
+    let mut table_cells: Vec<String> = Vec::new();
+    let mut current_cell = String::new();
 
     let preprocessed = preprocess_reasoning_tags(input);
-    let parser = Parser::new(&preprocessed);
+    let mut options = pulldown_cmark::Options::empty();
+    options.insert(pulldown_cmark::Options::ENABLE_TABLES);
+    options.insert(pulldown_cmark::Options::ENABLE_STRIKETHROUGH);
+    let parser = Parser::new_ext(&preprocessed, options);
 
     for event in parser {
         match event {
             Event::Start(tag) => match tag {
+                Tag::Table(_) => {
+                    if !current_spans.is_empty() {
+                        lines.push(Line::from(std::mem::take(&mut current_spans)));
+                    }
+                    in_table = true;
+                }
+                Tag::TableHead => {
+                    in_table_head = true;
+                    table_cells.clear();
+                }
+                Tag::TableRow => {
+                    in_table_head = false;
+                    table_cells.clear();
+                }
+                Tag::TableCell => {
+                    current_cell.clear();
+                }
                 Tag::Heading { level, .. } => {
                     if !current_spans.is_empty() {
                         lines.push(Line::from(std::mem::take(&mut current_spans)));
@@ -94,6 +118,42 @@ pub fn parse_markdown(input: &str) -> Vec<Line<'static>> {
                 _ => {}
             },
             Event::End(tag_end) => match tag_end {
+                TagEnd::TableCell => {
+                    table_cells.push(current_cell.trim().to_string());
+                    current_cell.clear();
+                }
+                TagEnd::TableHead | TagEnd::TableRow => {
+                    if !table_cells.is_empty() {
+                        if in_table_head {
+                            lines.push(Line::raw(""));
+                        }
+                        if table_cells.len() >= 2 {
+                            let col0 = &table_cells[0];
+                            let col1 = &table_cells[1];
+                            if in_table_head {
+                                lines.push(Line::from(vec![
+                                    Span::styled(format!("  {:<16} ", col0), Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
+                                    Span::styled(col1.to_string(), Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
+                                ]));
+                            } else {
+                                lines.push(Line::from(vec![
+                                    Span::styled(format!("  {:<16} ", col0), Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                                    Span::styled(col1.to_string(), Style::default().fg(th().text)),
+                                ]));
+                            }
+                        } else {
+                            let col0 = &table_cells[0];
+                            lines.push(Line::from(vec![
+                                Span::styled(format!("  • {col0}"), Style::default().fg(th().fg)),
+                            ]));
+                        }
+                        table_cells.clear();
+                    }
+                }
+                TagEnd::Table => {
+                    in_table = false;
+                    lines.push(Line::raw(""));
+                }
                 TagEnd::Heading(_) => {
                     heading_level = None;
                     if !current_spans.is_empty() {
@@ -128,6 +188,11 @@ pub fn parse_markdown(input: &str) -> Vec<Line<'static>> {
             },
             Event::Text(cow_str) => {
                 let processed_text = latex_to_unicode(&cow_str);
+
+                if in_table {
+                    current_cell.push_str(&processed_text);
+                    continue;
+                }
 
                 if is_code_block {
                     for line in processed_text.lines() {
@@ -166,6 +231,10 @@ pub fn parse_markdown(input: &str) -> Vec<Line<'static>> {
             }
             Event::Code(cow_code) => {
                 let processed = latex_to_unicode(&cow_code);
+                if in_table {
+                    current_cell.push_str(&processed);
+                    continue;
+                }
                 current_spans.push(Span::styled(
                     format!(" {processed} "),
                     Style::default()
@@ -207,5 +276,14 @@ mod tests {
         assert!(!lines.is_empty());
         let text = lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect::<Vec<_>>().join(" ");
         assert!(text.contains("Thinking Process") || text.contains("Analyzing taint flow"));
+    }
+
+    #[test]
+    fn test_markdown_table_rendering() {
+        let md = "| Command | Description |\n| :--- | :--- |\n| `/scan` | Execute autonomous code defense scan |\n| `/help` | Display reference |";
+        let lines = parse_markdown(md);
+        assert!(!lines.is_empty());
+        let text = lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect::<Vec<_>>().join(" ");
+        assert!(text.contains("Command") && text.contains("/scan"));
     }
 }

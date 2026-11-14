@@ -17,99 +17,235 @@ impl MatrixView {
         area: Rect,
         findings: &[VulnerabilityFinding],
         selected_index: usize,
+        filter_reachable: bool,
     ) -> Rect {
+        if findings.is_empty() {
+            let empty_block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(th().element))
+                .style(Style::default().bg(th().surface));
+            let inner = empty_block.inner(area);
+            f.render_widget(empty_block, area);
+
+            let empty_card = vec![
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("   ✓ Workspace Security Clean", Style::default().fg(th().success).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("   No security vulnerabilities detected in the current workspace.", Style::default().fg(th().fg)),
+                ]),
+                Line::from(vec![
+                    Span::styled("   SAST taint analysis, secret hunting, and network probing are idle.", Style::default().fg(th().text_sub)),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("   Next steps:", Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(vec![
+                    Span::styled("   • Run ", Style::default().fg(th().text_sub)),
+                    Span::styled("/scan", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(" or press ", Style::default().fg(th().text_sub)),
+                    Span::styled("[Space]", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(" to launch an autonomous defense audit.", Style::default().fg(th().text_sub)),
+                ]),
+                Line::from(vec![
+                    Span::styled("   • Switch AI provider with ", Style::default().fg(th().text_sub)),
+                    Span::styled("/provider", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(" or configure security rules in ", Style::default().fg(th().text_sub)),
+                    Span::styled("SECURITY.md", Style::default().fg(th().text)),
+                    Span::styled(".", Style::default().fg(th().text_sub)),
+                ]),
+            ];
+            f.render_widget(Paragraph::new(empty_card), inner);
+            return area;
+        }
+
+        // Summary Counts across ALL findings
+        let crit_count = findings.iter().filter(|f| f.severity == Severity::Critical).count();
+        let high_count = findings.iter().filter(|f| f.severity == Severity::High).count();
+        let med_count = findings.iter().filter(|f| f.severity == Severity::Medium).count();
+        let low_count = findings.iter().filter(|f| f.severity == Severity::Low || f.severity == Severity::Info).count();
+        let reachable_count = findings.iter().filter(|f| f.reachability == "REACHABLE").count();
+        let total_count = findings.len();
+
+        let filtered_indices: Vec<usize> = if filter_reachable {
+            findings
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| f.reachability == "REACHABLE")
+                .map(|(i, _)| i)
+                .collect()
+        } else {
+            (0..findings.len()).collect()
+        };
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Percentage(45), // Findings Table
-                Constraint::Percentage(55), // Finding Inspector
+                Constraint::Length(3),      // 0. Risk & Severity Gauge + Filter Bar
+                Constraint::Percentage(42), // 1. Findings Table
+                Constraint::Min(12),        // 2. Finding Inspector
             ])
             .split(area);
 
-        // 1. Findings Table (cells are ellipsized to their exact column width)
-        let fixed_cols: usize = 13 + 9 + 9 + 13 + 24 + 11 + 6;
-        let summary_w = (area.width as usize).saturating_sub(fixed_cols).max(24);
-        let rows = findings.iter().enumerate().map(|(i, item)| {
-            let is_selected = i == selected_index;
-            let (sev_str, sev_color) = match item.severity {
-                Severity::Critical => ("CRIT", th().destructive),
-                Severity::High => ("HIGH", th().warning),
-                Severity::Medium => ("MED", th().warning),
-                Severity::Low => ("LOW", th().primary),
-                Severity::Info => ("INFO", th().primary),
-            };
+        // 0. Severity Gauge & Interactive Filter Bar
+        let summary_block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(th().border))
+            .style(Style::default().bg(th().surface));
+        let inner_sum = summary_block.inner(chunks[0]);
+        f.render_widget(summary_block, chunks[0]);
 
-            let patch_badge = if item.patched {
-                Span::styled("● patched", Style::default().fg(th().success))
-            } else {
-                Span::styled("● open", Style::default().fg(th().destructive).add_modifier(Modifier::BOLD))
-            };
-
-            let (reach_label, reach_color) = match item.reachability.as_str() {
-                "REACHABLE" => ("REACHABLE", th().destructive),
-                "UNREACHABLE" => ("UNREACHABLE", th().success),
-                _ => ("POTENTIAL", th().warning),
-            };
-
-            let row_style = if is_selected {
-                Style::default().bg(th().element).fg(th().fg)
-            } else {
-                Style::default().fg(th().text_sub)
-            };
-
-            let prefix = if is_selected { "▸ " } else { "  " };
-
-            Row::new(vec![
-                Cell::from(ellipsize(&format!("{}{}", prefix, item.id), 13)).style(if is_selected { Style::default().fg(th().fg).add_modifier(Modifier::BOLD) } else { Style::default().fg(th().text_muted) }),
-                Cell::from(sev_str).style(Style::default().fg(sev_color).add_modifier(Modifier::BOLD)),
-                Cell::from(ellipsize(&item.cwe, 9)).style(Style::default().fg(th().text_sub)),
-                Cell::from(reach_label).style(Style::default().fg(reach_color).add_modifier(Modifier::BOLD)),
-                Cell::from(ellipsize_start(&format!("{}:{}", item.file_path.display(), item.line_number), 24)).style(Style::default().fg(th().text)),
-                Cell::from(ellipsize(&item.title, summary_w)),
-                Cell::from(patch_badge),
-            ]).style(row_style)
-        });
-
-        let header = Row::new(vec![
-            Cell::from("  FINDING ID").style(Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
-            Cell::from("SEVERITY").style(Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
-            Cell::from("CWE").style(Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
-            Cell::from("REACHABILITY").style(Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
-            Cell::from("LOCATION").style(Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
-            Cell::from("SUMMARY").style(Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
-            Cell::from("STATUS").style(Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
-        ])
-        .height(1)
-        .style(Style::default().bg(th().surface));
-
-        let widths = [
-            Constraint::Length(13),
-            Constraint::Length(9),
-            Constraint::Length(9),
-            Constraint::Length(13),
-            Constraint::Length(24),
-            Constraint::Min(24),
-            Constraint::Length(11),
+        let mut sum_spans = vec![
+            Span::raw(" "),
+            Span::styled(format!(" CRIT: {crit_count} "), Style::default().fg(Color::Rgb(255, 255, 255)).bg(th().destructive).add_modifier(Modifier::BOLD)),
+            Span::raw(" "),
+            Span::styled(format!(" HIGH: {high_count} "), Style::default().fg(Color::Rgb(0, 0, 0)).bg(th().warning).add_modifier(Modifier::BOLD)),
+            Span::raw(" "),
+            Span::styled(format!(" MED: {med_count} "), Style::default().fg(th().fg).bg(th().element_hi)),
+            Span::raw(" "),
+            Span::styled(format!(" LOW: {low_count} "), Style::default().fg(th().text_muted).bg(th().element)),
+            Span::styled("   │   ", Style::default().fg(th().border)),
+            Span::styled("Reachable: ", Style::default().fg(th().text_muted)),
+            Span::styled(
+                format!("{reachable_count}/{total_count}"),
+                Style::default().fg(if reachable_count > 0 { th().destructive } else { th().success }).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("   │   ", Style::default().fg(th().border)),
+            Span::styled("Filter: ", Style::default().fg(th().text_muted)),
         ];
 
-        let table_block = Block::default()
-            .borders(Borders::NONE)
-            .style(Style::default().bg(th().bg));
+        if filter_reachable {
+            sum_spans.push(Span::styled(" [r] Reachable Only ", Style::default().fg(th().on_accent).bg(th().primary).add_modifier(Modifier::BOLD)));
+            sum_spans.push(Span::raw(" "));
+            sum_spans.push(Span::styled("([a] show all)", Style::default().fg(th().text_dim)));
+        } else {
+            sum_spans.push(Span::styled(" [a] All Findings ", Style::default().fg(th().on_accent).bg(th().primary).add_modifier(Modifier::BOLD)));
+            sum_spans.push(Span::raw(" "));
+            sum_spans.push(Span::styled("([r] reachable only)", Style::default().fg(th().text_dim)));
+        }
 
-        let table = Table::new(rows, widths)
-            .header(header)
-            .block(table_block);
+        f.render_widget(Paragraph::new(Line::from(sum_spans)), inner_sum);
 
-        f.render_widget(table, chunks[0]);
+        // 1. Findings Table
+        let fixed_cols: usize = 13 + 9 + 9 + 13 + 24 + 11 + 6;
+        let summary_w = (area.width as usize).saturating_sub(fixed_cols).max(24);
+
+        if filtered_indices.is_empty() {
+            let filter_empty_block = Block::bordered()
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(th().border))
+                .style(Style::default().bg(th().bg));
+            let filter_empty_text = vec![
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("  ✓ No Reachable Vulnerabilities", Style::default().fg(th().success).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(vec![
+                    Span::styled("    All identified taint findings have zero live execution entrypoints.", Style::default().fg(th().text_sub)),
+                ]),
+                Line::from(vec![
+                    Span::styled("    Press ", Style::default().fg(th().text_dim)),
+                    Span::styled("[a]", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(" to inspect all potential and unreachable findings.", Style::default().fg(th().text_dim)),
+                ]),
+            ];
+            f.render_widget(Paragraph::new(filter_empty_text).block(filter_empty_block), chunks[1]);
+        } else {
+            let clamped_sel = selected_index.min(filtered_indices.len().saturating_sub(1));
+            let rows = filtered_indices.iter().enumerate().map(|(display_idx, &actual_idx)| {
+                let item = &findings[actual_idx];
+                let is_selected = display_idx == clamped_sel;
+                let (sev_str, sev_color) = match item.severity {
+                    Severity::Critical => ("CRIT", th().destructive),
+                    Severity::High => ("HIGH", th().warning),
+                    Severity::Medium => ("MED", th().warning),
+                    Severity::Low => ("LOW", th().primary),
+                    Severity::Info => ("INFO", th().primary),
+                };
+
+                let patch_badge = if item.patched {
+                    Span::styled("● patched", Style::default().fg(th().success))
+                } else {
+                    Span::styled("● open", Style::default().fg(th().destructive).add_modifier(Modifier::BOLD))
+                };
+
+                let (reach_label, reach_color) = match item.reachability.as_str() {
+                    "REACHABLE" => ("REACHABLE", th().destructive),
+                    "UNREACHABLE" => ("UNREACHABLE", th().success),
+                    _ => ("POTENTIAL", th().warning),
+                };
+
+                let row_style = if is_selected {
+                    Style::default().bg(th().element).fg(th().fg)
+                } else {
+                    Style::default().fg(th().text_sub)
+                };
+
+                let prefix = if is_selected { "▸ " } else { "  " };
+
+                Row::new(vec![
+                    Cell::from(ellipsize(&format!("{}{}", prefix, item.id), 13)).style(if is_selected { Style::default().fg(th().fg).add_modifier(Modifier::BOLD) } else { Style::default().fg(th().text_muted) }),
+                    Cell::from(sev_str).style(Style::default().fg(sev_color).add_modifier(Modifier::BOLD)),
+                    Cell::from(ellipsize(&item.cwe, 9)).style(Style::default().fg(th().text_sub)),
+                    Cell::from(reach_label).style(Style::default().fg(reach_color).add_modifier(Modifier::BOLD)),
+                    Cell::from(ellipsize_start(&format!("{}:{}", item.file_path.display(), item.line_number), 24)).style(Style::default().fg(th().text)),
+                    Cell::from(ellipsize(&item.title, summary_w)),
+                    Cell::from(patch_badge),
+                ]).style(row_style)
+            });
+
+            let header = Row::new(vec![
+                Cell::from("  FINDING ID").style(Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
+                Cell::from("SEVERITY").style(Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
+                Cell::from("CWE").style(Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
+                Cell::from("REACHABILITY").style(Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
+                Cell::from("LOCATION").style(Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
+                Cell::from("SUMMARY").style(Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
+                Cell::from("STATUS").style(Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
+            ])
+            .height(1)
+            .style(Style::default().bg(th().surface));
+
+            let widths = [
+                Constraint::Length(13),
+                Constraint::Length(9),
+                Constraint::Length(9),
+                Constraint::Length(13),
+                Constraint::Length(24),
+                Constraint::Min(24),
+                Constraint::Length(11),
+            ];
+
+            let table_block = Block::default()
+                .borders(Borders::NONE)
+                .style(Style::default().bg(th().bg));
+
+            let table = Table::new(rows, widths)
+                .header(header)
+                .block(table_block);
+
+            f.render_widget(table, chunks[1]);
+        }
 
         // 2. Selected Vulnerability Detail Panel (IDE-Style Formatted Inspector)
+        let clamped_sel = if filtered_indices.is_empty() {
+            0
+        } else {
+            selected_index.min(filtered_indices.len().saturating_sub(1))
+        };
+        let selected_finding = filtered_indices.get(clamped_sel).and_then(|&idx| findings.get(idx));
+
         let detail_block = Block::bordered()
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(th().border))
             .title_top(Line::from(vec![
-                Span::styled(" finding inspector ", Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
-                if let Some(sel) = findings.get(selected_index) {
-                    let max_t_w = (chunks[1].width as usize).saturating_sub(38).min(45);
+                Span::styled(" ◈ Finding Inspector ", Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
+                if let Some(sel) = selected_finding {
+                    let max_t_w = (chunks[2].width as usize).saturating_sub(38).min(45);
                     Span::styled(
                         format!("{} · {} ", sel.id, ellipsize(&sel.title, max_t_w)),
                         Style::default().fg(th().text_muted),
@@ -120,22 +256,24 @@ impl MatrixView {
             ]))
             .title_bottom(Line::from(vec![
                 Span::styled(" [Alt+3] ", Style::default().fg(th().text_sub).add_modifier(Modifier::BOLD)),
-                Span::styled("diff  ", Style::default().fg(th().text_dim)),
+                Span::styled("diff  •  ", Style::default().fg(th().text_dim)),
                 Span::styled("[/patch] ", Style::default().fg(th().text_sub).add_modifier(Modifier::BOLD)),
-                Span::styled("apply fix  ", Style::default().fg(th().text_dim)),
+                Span::styled("apply fix  •  ", Style::default().fg(th().text_dim)),
+                Span::styled("[r] ", Style::default().fg(th().text_sub).add_modifier(Modifier::BOLD)),
+                Span::styled("toggle reachable  •  ", Style::default().fg(th().text_dim)),
                 Span::styled("[↑↓/jk] ", Style::default().fg(th().text_sub).add_modifier(Modifier::BOLD)),
                 Span::styled("navigate ", Style::default().fg(th().text_dim)),
             ]))
             .style(Style::default().bg(th().surface));
 
-        let inner_detail = detail_block.inner(chunks[1]);
-        f.render_widget(detail_block, chunks[1]);
+        let inner_detail = detail_block.inner(chunks[2]);
+        f.render_widget(detail_block, chunks[2]);
 
-        if let Some(selected) = findings.get(selected_index) {
+        if let Some(selected) = selected_finding {
             let inspector_rows = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(5), // Top Card: IDE / Text Editor Code View
+                    Constraint::Length(6), // Top Card: IDE / Text Editor Code View
                     Constraint::Min(4),    // Bottom Card: Impact, Triage Verdict & Remediation
                 ])
                 .split(inner_detail);
@@ -146,7 +284,7 @@ impl MatrixView {
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(th().border))
                 .title_top(Line::from(vec![
-                    Span::styled(" source location ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(" 📄 Source Code Location ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
                     Span::styled(format!(" {} ", file_loc), Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
                 ]))
                 .style(Style::default().bg(th().bg));
@@ -189,6 +327,16 @@ impl MatrixView {
                 ),
             ]));
 
+            // Compiler-style AST taint diagnostic callout
+            code_lines.push(Line::from(vec![
+                Span::styled("      │ ", Style::default().fg(th().destructive)),
+                Span::styled("▲ ", Style::default().fg(th().destructive).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("taint sink: {} ({})", selected.cwe, ellipsize(&selected.title, code_max_w.saturating_sub(20))),
+                    Style::default().fg(th().destructive).add_modifier(Modifier::ITALIC),
+                ),
+            ]));
+
             // Context line after (if present)
             if let Some(next) = next_line {
                 if !next.is_empty() {
@@ -201,12 +349,12 @@ impl MatrixView {
 
             f.render_widget(Paragraph::new(code_lines).wrap(Wrap { trim: false }), inner_code);
 
-            // 2. BOTTOM CARD: Impact, Triage Verdict & Remediation
+            // 2. BOTTOM CARDS: Impact & Triage (Left 50%) vs Remediation (Right 50%)
             let bottom_cols = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
                     Constraint::Percentage(50),
-                    Constraint::Length(1), // Divider
+                    Constraint::Length(1), // Spacer
                     Constraint::Percentage(50),
                 ])
                 .split(inspector_rows[1]);
@@ -228,67 +376,71 @@ impl MatrixView {
                 selected.triage_reasoning.clone()
             };
 
-            let l_col_w = (bottom_cols[0].width as usize).saturating_sub(4);
+            let left_block = Block::bordered()
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(th().border))
+                .title(Line::from(vec![
+                    Span::styled(" ◈ Triage Verdict & Impact ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" [CWE: {}] ", selected.cwe), Style::default().fg(th().text_dim)),
+                ]))
+                .style(Style::default().bg(th().surface));
+            let inner_l = left_block.inner(bottom_cols[0]);
+            f.render_widget(left_block, bottom_cols[0]);
+
+            let l_col_w = (inner_l.width as usize).saturating_sub(14).max(10);
             let left_content = vec![
                 Line::from(vec![
-                    Span::styled(" IMPACT & CONTEXT ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!(" [CWE: {}] ", selected.cwe), Style::default().fg(th().text_dim)),
-                ]),
-                Line::from(vec![
-                    Span::styled("   summary    ", Style::default().fg(th().text_dim)),
-                    Span::styled(ellipsize(&selected.description, l_col_w * 2), Style::default().fg(th().text)),
-                ]),
-                Line::raw(""),
-                Line::from(vec![
-                    Span::styled(" TRIAGE VERDICT   ", Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
+                    Span::styled("VERDICT   ", Style::default().fg(th().text_dim)),
                     Span::styled(
                         format!(" {} · {} ", selected.triage_verdict, selected.reachability),
                         Style::default().fg(reach_fg).bg(reach_bg).add_modifier(Modifier::BOLD),
                     ),
                 ]),
                 Line::from(vec![
-                    Span::styled("   reasoning  ", Style::default().fg(th().text_dim)),
-                    Span::styled(ellipsize(&reasoning, l_col_w.saturating_sub(15)), Style::default().fg(th().text_sub)),
+                    Span::styled("SUMMARY   ", Style::default().fg(th().text_dim)),
+                    Span::styled(ellipsize(&selected.description, l_col_w), Style::default().fg(th().fg)),
                 ]),
                 Line::from(vec![
-                    Span::styled("   callpath   ", Style::default().fg(th().text_dim)),
-                    Span::styled(ellipsize(&call_chain, l_col_w.saturating_sub(15)), Style::default().fg(th().text_muted)),
+                    Span::styled("REASONING ", Style::default().fg(th().text_dim)),
+                    Span::styled(ellipsize(&reasoning, l_col_w), Style::default().fg(th().text_sub)),
+                ]),
+                Line::from(vec![
+                    Span::styled("CALLPATH  ", Style::default().fg(th().text_dim)),
+                    Span::styled(ellipsize(&call_chain, l_col_w), Style::default().fg(th().text_muted)),
                 ]),
             ];
-            f.render_widget(Paragraph::new(left_content).wrap(Wrap { trim: false }), bottom_cols[0]);
+            f.render_widget(Paragraph::new(left_content).wrap(Wrap { trim: false }), inner_l);
 
-            let divider_lines = vec![Line::from(Span::styled("│", Style::default().fg(th().border))); bottom_cols[1].height as usize];
-            f.render_widget(Paragraph::new(divider_lines), bottom_cols[1]);
+            let right_block = Block::bordered()
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(th().border))
+                .title(Line::from(vec![
+                    Span::styled(" 🛡 Remediation & Fix Plan ", Style::default().fg(th().success).add_modifier(Modifier::BOLD)),
+                ]))
+                .style(Style::default().bg(th().surface));
+            let inner_r = right_block.inner(bottom_cols[2]);
+            f.render_widget(right_block, bottom_cols[2]);
 
-            let r_col_w = (bottom_cols[2].width as usize).saturating_sub(4);
+            let r_col_w = (inner_r.width as usize).saturating_sub(14).max(10);
             let right_content = vec![
                 Line::from(vec![
-                    Span::styled(" REMEDIATION & FIX ", Style::default().fg(th().success).add_modifier(Modifier::BOLD)),
-                ]),
-                Line::from(vec![
-                    Span::styled("   action     ", Style::default().fg(th().text_dim)),
+                    Span::styled("ACTION    ", Style::default().fg(th().text_dim)),
                     Span::styled("✓ ", Style::default().fg(th().success).add_modifier(Modifier::BOLD)),
-                    Span::styled(ellipsize(&selected.recommendation, r_col_w * 2), Style::default().fg(th().text)),
+                    Span::styled(ellipsize(&selected.recommendation, r_col_w), Style::default().fg(th().fg)),
                 ]),
                 Line::raw(""),
                 Line::from(vec![
-                    Span::styled(" QUICK ACTIONS ", Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
-                ]),
-                Line::from(vec![
-                    Span::styled("   press ", Style::default().fg(th().text_dim)),
+                    Span::styled("HOTKEYS   ", Style::default().fg(th().text_dim)),
+                    Span::styled("Press ", Style::default().fg(th().text_sub)),
                     Span::styled("[/patch]", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
-                    Span::styled(" or switch to tab [3] to apply verified fix.", Style::default().fg(th().text_sub)),
+                    Span::styled(" or switch to ", Style::default().fg(th().text_sub)),
+                    Span::styled("[Alt+3 Patches]", Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
+                    Span::styled(" to review AST diff.", Style::default().fg(th().text_sub)),
                 ]),
             ];
-            f.render_widget(Paragraph::new(right_content).wrap(Wrap { trim: false }), bottom_cols[2]);
-        } else {
-            let empty_text = vec![Line::from(vec![
-                Span::raw("  "),
-                Span::styled("no vulnerabilities identified in current scope • workspace clean or press [space] to run defense audit.", Style::default().fg(th().text_muted)),
-            ])];
-            f.render_widget(Paragraph::new(empty_text), inner_detail);
+            f.render_widget(Paragraph::new(right_content).wrap(Wrap { trim: false }), inner_r);
         }
 
-        chunks[0]
+        chunks[1]
     }
 }

@@ -92,7 +92,9 @@ fn test_app_empty_state_and_auth_modal_gate() {
 
     // If API key is not configured, trigger_audit must block and display the auth modal
     app.config.api_key = None;
+    app.config.provider_keys.clear();
     app.config.provider = asterisk::types::AiProvider::AnthropicClaude;
+    app.active_provider = asterisk::types::AiProvider::AnthropicClaude;
 
     // Triggering audit without key
     app.trigger_audit();
@@ -286,9 +288,10 @@ fn test_slash_command_isolation_and_tab_click_accuracy() {
     let sidebar_rect = app.click_targets.sidebar_rect.expect("Sidebar rect must be set");
     let workspace_rect = app.click_targets.workspace_rect.expect("Workspace rect must be set");
 
-    // 50/50 split verification
-    assert_eq!(sidebar_rect.width, 60);
-    assert_eq!(workspace_rect.width, 60);
+    // Master-detail proportion verification (45% left sidebar / 55% right workspace)
+    assert_eq!(sidebar_rect.width, 54);
+    assert_eq!(workspace_rect.width, 66);
+    assert_eq!(sidebar_rect.width + workspace_rect.width, 120);
 
     // 3. Tab click exact boundaries
     assert_eq!(app.click_targets.tab_rects.len(), 5);
@@ -1054,4 +1057,166 @@ fn test_unauthenticated_scan_strictly_empty() {
     assert!(app.show_key_modal, "Auth/Key modal must be shown to prompt the user");
 
     let _ = std::fs::remove_file(&temp_cfg);
+}
+
+#[test]
+fn test_tui_design_review_enhancements() {
+    isolate_home();
+    use asterisk::ui::app::{App, FocusedPane};
+    use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::Terminal;
+
+    let mut app = App::new(PathBuf::from("./tests/fixtures/vulnerable_repo"), false);
+
+    // 1. Minimum terminal size protection check
+    let small_backend = TestBackend::new(50, 10);
+    let mut small_terminal = Terminal::new(small_backend).unwrap();
+    small_terminal.draw(|f| app.render(f)).expect("Small terminal render must not panic");
+    let buffer = small_terminal.backend().buffer().clone();
+    let text: String = buffer.content().iter().map(|c| c.symbol()).collect();
+    assert!(text.contains("Terminal Window Too Small"), "Should show polite resize notice on small screens");
+
+    // 2. Normal terminal rendering with designed empty states across all tabs
+    let normal_backend = TestBackend::new(120, 35);
+    let mut terminal = Terminal::new(normal_backend).unwrap();
+
+    // Tab 1 (Findings) Empty State
+    app.current_tab = 1;
+    terminal.draw(|f| app.render(f)).expect("Tab 1 render must succeed");
+    let t1_text: String = terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+    assert!(t1_text.contains("Workspace Security Clean"), "Tab 1 must show designed empty state");
+
+    // Tab 2 (Patches) Empty State
+    app.current_tab = 2;
+    terminal.draw(|f| app.render(f)).expect("Tab 2 render must succeed");
+    let t2_text: String = terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+    assert!(t2_text.contains("No Hardening Patches Required"), "Tab 2 must show designed empty state");
+
+    // Tab 3 (Logs) Empty State
+    app.current_tab = 3;
+    terminal.draw(|f| app.render(f)).expect("Tab 3 render must succeed");
+    let t3_text: String = terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+    assert!(t3_text.contains("Execution Event Log Idle"), "Tab 3 must show designed empty state");
+
+    // 3. Focus toggle and Chatbot Keyboard Scrolling
+    app.current_tab = 0;
+    app.focused_pane = FocusedPane::Chatbot;
+    app.chat_scroll = 0;
+
+    // Test PageUp / PageDown keys for chat scroll
+    app.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::empty()));
+    assert_eq!(app.chat_scroll, 5, "PageUp must scroll chat up by 5 lines");
+
+    app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::empty()));
+    assert_eq!(app.chat_scroll, 0, "PageDown must scroll chat down");
+
+    // Test Ctrl+U / Ctrl+D
+    app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    assert_eq!(app.chat_scroll, 5, "Ctrl+U must scroll chat up");
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+    assert_eq!(app.chat_scroll, 0, "Ctrl+D must scroll chat down");
+
+    // Test Shift+Tab / Ctrl+W pane switching
+    app.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::empty()));
+    assert_eq!(app.focused_pane, FocusedPane::Workflow, "Shift+Tab must toggle focus to Workflow");
+
+    app.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::empty()));
+    assert_eq!(app.focused_pane, FocusedPane::Chatbot, "Shift+Tab must toggle focus back to Chatbot");
+}
+
+#[test]
+fn test_interactive_help_modal_and_findings_reachability_filter() {
+    isolate_home();
+    use asterisk::types::{Severity, VulnerabilityFinding};
+    use asterisk::ui::app::{ActiveModal, App, FocusedPane};
+    use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::Terminal;
+
+    let mut app = App::new(PathBuf::from("./tests/fixtures/vulnerable_repo"), false);
+
+    // 1. Pressing '?' opens the interactive help modal cheat sheet
+    assert!(!app.show_key_modal);
+    app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::empty()));
+    assert!(app.show_key_modal, "'?' must open modal");
+    assert!(matches!(app.active_modal, ActiveModal::Help));
+
+    // Render help modal and verify cheat sheet contents
+    let backend = TestBackend::new(120, 35);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| app.render(f)).expect("Help modal render must succeed");
+    let text: String = terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+    assert!(text.contains("ASTERISK"), "Modal should display Asterisk header");
+    assert!(text.contains("Keyboard Shortcuts"), "Modal should list keyboard shortcuts");
+    assert!(text.contains("Shift+Tab"), "Modal should document Shift+Tab");
+    assert!(text.contains("/scan"), "Modal should document /scan");
+
+    // Esc closes help modal
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+    assert!(!app.show_key_modal, "Esc must dismiss help modal");
+    assert!(matches!(app.active_modal, ActiveModal::None));
+
+    // 2. Tab 1 Findings reachability filter and vim navigation
+    app.current_tab = 1;
+    app.focused_pane = FocusedPane::Workflow;
+
+    app.findings = vec![
+        VulnerabilityFinding {
+            id: "AST-VULN-001".to_string(),
+            title: "SQL Injection".to_string(),
+            severity: Severity::Critical,
+            cwe: "CWE-89".to_string(),
+            reachability: "REACHABLE".to_string(),
+            file_path: PathBuf::from("src/db.rs"),
+            line_number: 42,
+            snippet: "db.query(&sql);".to_string(),
+            description: "Unsanitized input executed in SQL engine.".to_string(),
+            recommendation: "Use parameterized queries.".to_string(),
+            patched: false,
+            call_path: vec!["main".to_string(), "handle_req".to_string()],
+            triage_verdict: "Confirmed Exploitable".to_string(),
+            triage_reasoning: "Taint propagates directly from HTTP body to query sink.".to_string(),
+        },
+        VulnerabilityFinding {
+            id: "AST-VULN-002".to_string(),
+            title: "Dead Code Path Weak Hash".to_string(),
+            severity: Severity::Low,
+            cwe: "CWE-328".to_string(),
+            reachability: "UNREACHABLE".to_string(),
+            file_path: PathBuf::from("src/legacy.rs"),
+            line_number: 10,
+            snippet: "md5(data);".to_string(),
+            description: "Deprecated hash algorithm.".to_string(),
+            recommendation: "Upgrade to SHA-256.".to_string(),
+            patched: false,
+            call_path: Vec::new(),
+            triage_verdict: "Non-exploitable Phantom".to_string(),
+            triage_reasoning: "Unreachable dead function.".to_string(),
+        },
+    ];
+
+    terminal.draw(|f| app.render(f)).expect("Findings matrix render must succeed");
+    let t_all: String = terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+    assert!(t_all.contains("CRIT: 1"));
+    assert!(t_all.contains("LOW: 1"));
+    assert!(t_all.contains("Reachable: 1/2"));
+
+    // Press 'r' in Workflow pane to toggle reachable-only filter
+    assert!(!app.findings_filter_reachable);
+    app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::empty()));
+    assert!(app.findings_filter_reachable, "'r' must activate reachability filter");
+
+    // Press 'a' to reset to all findings
+    app.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()));
+    assert!(!app.findings_filter_reachable, "'a' must reset filter to all findings");
+
+    // Test 'j' and 'k' navigation in Workflow pane
+    assert_eq!(app.selected_matrix_row, 0);
+    app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::empty()));
+    assert_eq!(app.selected_matrix_row, 1, "'j' must move cursor down to next finding");
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::empty()));
+    assert_eq!(app.selected_matrix_row, 0, "'k' must move cursor up to previous finding");
 }

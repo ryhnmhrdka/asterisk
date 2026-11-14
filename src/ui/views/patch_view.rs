@@ -25,6 +25,49 @@ impl PatchView {
         selected_index: usize,
         action_msg: &Option<String>,
     ) -> PatchClickTargets {
+        if patches.is_empty() {
+            let empty_block = Block::bordered()
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(th().element))
+                .style(Style::default().bg(th().surface));
+            let inner = empty_block.inner(area);
+            f.render_widget(empty_block, area);
+
+            let empty_card = vec![
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("   ✓ No Hardening Patches Required", Style::default().fg(th().success).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("   All files in the audited workspace scope are verified and clean.", Style::default().fg(th().fg)),
+                ]),
+                Line::from(vec![
+                    Span::styled("   When an audit detects vulnerable code (SQLi, command injection, secret leak),", Style::default().fg(th().text_sub)),
+                ]),
+                Line::from(vec![
+                    Span::styled("   auto-hardening generates atomic diffs and verified unit tests here.", Style::default().fg(th().text_sub)),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("   Next steps:", Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(vec![
+                    Span::styled("   • Run ", Style::default().fg(th().text_sub)),
+                    Span::styled("/scan", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(" or press ", Style::default().fg(th().text_sub)),
+                    Span::styled("[Space]", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(" to inspect workspace vulnerabilities.", Style::default().fg(th().text_sub)),
+                ]),
+            ];
+            f.render_widget(Paragraph::new(empty_card), inner);
+            return PatchClickTargets {
+                list_area: area,
+                btn_apply: None,
+                btn_rollback: None,
+            };
+        }
+
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -38,7 +81,7 @@ impl PatchView {
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(th().border))
             .title(Line::from(vec![
-                Span::styled(" [remediation patches] ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" ◈ Remediation Patches ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
                 Span::styled(format!("({} total) ", patches.len()), Style::default().fg(th().text_muted)),
             ]))
             .style(Style::default().bg(th().surface));
@@ -137,7 +180,7 @@ impl PatchView {
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(th().border))
                 .title(Line::from(vec![
-                    Span::styled(" [patch actions] ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(" ⚡ Patch Actions ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
                 ]))
                 .style(Style::default().bg(th().surface));
             let inner_action = bar_block.inner(action_bar_area);
@@ -197,7 +240,7 @@ impl PatchView {
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(th().border))
             .title(Line::from(vec![
-                Span::styled(" Code Diff ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" 📄 Code Diff ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
                 if let Some(patch) = patches.get(selected_index) {
                     Span::styled(format!(" {} ", patch.target_file.display()), Style::default().fg(th().fg))
                 } else {
@@ -231,15 +274,30 @@ impl PatchView {
             for line in patch.unified_diff.lines() {
                 let prefix_span = Span::raw("  ");
                 if line.starts_with('+') && !line.starts_with("+++") {
-                    lines.push(Line::from(vec![prefix_span, Span::styled(line, Style::default().fg(th().success).add_modifier(Modifier::BOLD))]));
+                    lines.push(Line::from(vec![
+                        prefix_span,
+                        Span::styled(format!(" {line} "), Style::default().fg(th().success).bg(th().success_bg).add_modifier(Modifier::BOLD)),
+                    ]));
                 } else if line.starts_with('-') && !line.starts_with("---") {
-                    lines.push(Line::from(vec![prefix_span, Span::styled(line, Style::default().fg(th().destructive))]));
-                } else if line.starts_with("---") || line.starts_with("+++") {
-                    lines.push(Line::from(vec![prefix_span, Span::styled(line, Style::default().fg(th().text_muted))]));
+                    lines.push(Line::from(vec![
+                        prefix_span,
+                        Span::styled(format!(" {line} "), Style::default().fg(th().destructive).bg(th().destructive_bg)),
+                    ]));
                 } else if line.starts_with("@@") {
-                    lines.push(Line::from(vec![prefix_span, Span::styled(line, Style::default().fg(th().primary))]));
+                    lines.push(Line::from(vec![
+                        prefix_span,
+                        Span::styled(format!(" {line} "), Style::default().fg(th().primary).add_modifier(Modifier::ITALIC)),
+                    ]));
+                } else if line.starts_with("---") || line.starts_with("+++") {
+                    lines.push(Line::from(vec![
+                        prefix_span,
+                        Span::styled(line, Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
+                    ]));
                 } else {
-                    lines.push(Line::from(vec![prefix_span, Span::styled(line, Style::default().fg(th().text_sub))]));
+                    lines.push(Line::from(vec![
+                        prefix_span,
+                        Span::styled(line, Style::default().fg(th().text_sub)),
+                    ]));
                 }
             }
             lines
@@ -259,7 +317,7 @@ impl PatchView {
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(th().border))
             .title(Line::from(vec![
-                Span::styled(" Verification Unit Test ", Style::default().fg(th().success).add_modifier(Modifier::BOLD)),
+                Span::styled(" 🧪 AST Verification Unit Test ", Style::default().fg(th().success).add_modifier(Modifier::BOLD)),
                 if let Some(patch) = patches.get(selected_index) {
                     Span::styled(format!(" {} ", patch.target_file.display()), Style::default().fg(th().text_muted))
                 } else {

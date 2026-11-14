@@ -119,10 +119,16 @@ pub async fn fetch_live_models(
             }
         }
 
-        AiProvider::DeepSeek => {
-            let key = api_key.ok_or_else(|| "DeepSeek API key is missing".to_string())?;
+        AiProvider::DeepSeek
+        | AiProvider::Groq
+        | AiProvider::OpenRouter
+        | AiProvider::Mistral
+        | AiProvider::TogetherAi
+        | AiProvider::XAi => {
+            let key = api_key.ok_or_else(|| format!("{} API key is missing", provider.name()))?;
+            let default_base = provider.default_base_url().unwrap_or("https://api.openai.com/v1");
             let base = custom_base_url
-                .unwrap_or("https://api.deepseek.com")
+                .unwrap_or(default_base)
                 .trim_end_matches('/');
             let url = format!("{base}/models");
 
@@ -131,18 +137,18 @@ pub async fn fetch_live_models(
                 .header("Authorization", format!("Bearer {key}"))
                 .send()
                 .await
-                .map_err(|e| format!("Failed to connect to DeepSeek ({url}): {e}"))?;
+                .map_err(|e| format!("Failed to connect to {} ({url}): {e}", provider.name()))?;
 
             if !res.status().is_success() {
                 let status = res.status();
                 let err_text = res.text().await.unwrap_or_default();
-                return Err(format!("DeepSeek API returned HTTP {status}: {err_text}"));
+                return Err(format!("{} API returned HTTP {status}: {err_text}", provider.name()));
             }
 
             let json: Value = res
                 .json()
                 .await
-                .map_err(|e| format!("Invalid JSON from DeepSeek: {e}"))?;
+                .map_err(|e| format!("Invalid JSON from {}: {e}", provider.name()))?;
 
             if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
                 for item in data {

@@ -438,11 +438,21 @@ impl ExecutionEngine {
                     patches.iter().filter(|p| p.safe_outputs_passed).count()
                 );
                 let ai_reply = hub.query(&query).await;
+                let (thought_opt, clean_text) = crate::core::agent::parse_ai_thinking_content(&ai_reply);
+                if let Some(thought) = thought_opt {
+                    send_chat(
+                        &self.sender,
+                        ChatMessage::Thinking {
+                            agent: format!("ai_reasoning:{}", cfg.get_model()),
+                            thought,
+                        },
+                    );
+                }
                 send_chat(
                     &self.sender,
                     ChatMessage::Agent {
                         sender: format!("ai_triage:{}", cfg.get_model()),
-                        text: ai_reply,
+                        text: clean_text,
                     },
                 );
             }

@@ -6,6 +6,30 @@ use ratatui::{
     text::{Line, Span},
 };
 
+pub fn preprocess_reasoning_tags(input: &str) -> String {
+    let mut out = input.to_string();
+    let lower = out.to_lowercase();
+    if lower.contains("<think>") {
+        out = out.replace("<think>", "\n\n> 💭 **Thinking Process**:\n> *")
+                 .replace("<THINK>", "\n\n> 💭 **Thinking Process**:\n> *")
+                 .replace("</think>", "*\n\n")
+                 .replace("</THINK>", "*\n\n");
+    }
+    if lower.contains("<thought>") {
+        out = out.replace("<thought>", "\n\n> 💭 **Thinking Process**:\n> *")
+                 .replace("<THOUGHT>", "\n\n> 💭 **Thinking Process**:\n> *")
+                 .replace("</thought>", "*\n\n")
+                 .replace("</THOUGHT>", "*\n\n");
+    }
+    if lower.contains("<reasoning>") {
+        out = out.replace("<reasoning>", "\n\n> 💭 **Thinking Process**:\n> *")
+                 .replace("<REASONING>", "\n\n> 💭 **Thinking Process**:\n> *")
+                 .replace("</reasoning>", "*\n\n")
+                 .replace("</REASONING>", "*\n\n");
+    }
+    out
+}
+
 pub fn parse_markdown(input: &str) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut current_spans: Vec<Span<'static>> = Vec::new();
@@ -17,7 +41,8 @@ pub fn parse_markdown(input: &str) -> Vec<Line<'static>> {
     let mut list_index: Option<u64> = None;
     let mut in_blockquote = false;
 
-    let parser = Parser::new(input);
+    let preprocessed = preprocess_reasoning_tags(input);
+    let parser = Parser::new(&preprocessed);
 
     for event in parser {
         match event {
@@ -173,5 +198,14 @@ mod tests {
         let md = "# Title\n- Item 1 with `code`\n- Formula $\\alpha + \\beta^2$";
         let lines = parse_markdown(md);
         assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn test_thinking_tag_preprocessing() {
+        let md = "<think>Analyzing taint flow graph...</think>\nFound zero leaks.";
+        let lines = parse_markdown(md);
+        assert!(!lines.is_empty());
+        let text = lines.iter().flat_map(|l| l.spans.iter().map(|s| s.content.to_string())).collect::<Vec<_>>().join(" ");
+        assert!(text.contains("Thinking Process") || text.contains("Analyzing taint flow"));
     }
 }

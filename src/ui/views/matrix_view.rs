@@ -3,7 +3,7 @@ use crate::types::{Severity, VulnerabilityFinding};
 use crate::ui::fit::{ellipsize, ellipsize_start};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, Wrap},
     Frame,
@@ -21,8 +21,8 @@ impl MatrixView {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(6),
-                Constraint::Length(12),
+                Constraint::Percentage(45), // Findings Table
+                Constraint::Percentage(55), // Finding Inspector
             ])
             .split(area);
 
@@ -102,12 +102,12 @@ impl MatrixView {
 
         f.render_widget(table, chunks[0]);
 
-        // 2. Selected Vulnerability Detail Panel (Sleek Minimalist Inspector)
+        // 2. Selected Vulnerability Detail Panel (IDE-Style Formatted Inspector)
         let detail_block = Block::bordered()
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(th().border))
             .title_top(Line::from(vec![
-                Span::styled(" [finding inspector] ", Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
+                Span::styled(" finding inspector ", Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
                 if let Some(sel) = findings.get(selected_index) {
                     let max_t_w = (chunks[1].width as usize).saturating_sub(38).min(45);
                     Span::styled(
@@ -132,8 +132,93 @@ impl MatrixView {
         f.render_widget(detail_block, chunks[1]);
 
         if let Some(selected) = findings.get(selected_index) {
+            let inspector_rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(5), // Top Card: IDE / Text Editor Code View
+                    Constraint::Min(4),    // Bottom Card: Impact, Triage Verdict & Remediation
+                ])
+                .split(inner_detail);
+
+            // 1. TOP CARD: IDE Code Viewer with Red Highlight on the Vulnerable Line
+            let file_loc = format!("{}:{}", selected.file_path.display(), selected.line_number);
+            let code_card_block = Block::bordered()
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(th().border))
+                .title_top(Line::from(vec![
+                    Span::styled(" source location ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" {} ", file_loc), Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
+                ]))
+                .style(Style::default().bg(th().bg));
+            let inner_code = code_card_block.inner(inspector_rows[0]);
+            f.render_widget(code_card_block, inspector_rows[0]);
+
+            let snippet_trimmed = selected.snippet.trim();
+            let mut code_lines = Vec::new();
+
+            // Try reading context lines from disk if file is accessible
+            let (prev_line, next_line) = if let Ok(content) = std::fs::read_to_string(&selected.file_path) {
+                let lines_vec: Vec<&str> = content.lines().collect();
+                let idx = selected.line_number.saturating_sub(1);
+                let prev = if idx > 0 { lines_vec.get(idx - 1).map(|s| s.trim().to_string()) } else { None };
+                let next = lines_vec.get(idx + 1).map(|s| s.trim().to_string());
+                (prev, next)
+            } else {
+                (None, None)
+            };
+
+            let gutter_w = 6;
+            let code_max_w = (inner_code.width as usize).saturating_sub(gutter_w + 4).max(20);
+
+            // Context line before (if present)
+            if let Some(prev) = prev_line {
+                if !prev.is_empty() && selected.line_number > 1 {
+                    code_lines.push(Line::from(vec![
+                        Span::styled(format!(" {:>4} │ ", selected.line_number - 1), Style::default().fg(th().text_dim)),
+                        Span::styled(ellipsize(&prev, code_max_w), Style::default().fg(th().text_sub)),
+                    ]));
+                }
+            }
+
+            // Faulty / Vulnerable Code Line (Highlighted with solid red background)
+            code_lines.push(Line::from(vec![
+                Span::styled(format!(" {:>4} │ ", selected.line_number), Style::default().fg(th().destructive).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!(" {} ", ellipsize(if snippet_trimmed.is_empty() { "(empty snippet)" } else { snippet_trimmed }, code_max_w)),
+                    Style::default().fg(Color::Rgb(255, 255, 255)).bg(th().destructive).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+
+            // Context line after (if present)
+            if let Some(next) = next_line {
+                if !next.is_empty() {
+                    code_lines.push(Line::from(vec![
+                        Span::styled(format!(" {:>4} │ ", selected.line_number + 1), Style::default().fg(th().text_dim)),
+                        Span::styled(ellipsize(&next, code_max_w), Style::default().fg(th().text_sub)),
+                    ]));
+                }
+            }
+
+            f.render_widget(Paragraph::new(code_lines).wrap(Wrap { trim: false }), inner_code);
+
+            // 2. BOTTOM CARD: Impact, Triage Verdict & Remediation
+            let bottom_cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(50),
+                    Constraint::Length(1), // Divider
+                    Constraint::Percentage(50),
+                ])
+                .split(inspector_rows[1]);
+
+            let (reach_fg, reach_bg) = match selected.reachability.as_str() {
+                "REACHABLE" => (th().destructive, th().destructive_bg),
+                "UNREACHABLE" => (th().success, th().element),
+                _ => (th().warning, th().warning_bg),
+            };
+
             let call_chain = if selected.call_path.is_empty() {
-                "direct execution".to_string()
+                "direct taint execution".to_string()
             } else {
                 selected.call_path.join(" ➔ ")
             };
@@ -143,136 +228,59 @@ impl MatrixView {
                 selected.triage_reasoning.clone()
             };
 
-            let (reach_fg, reach_bg) = match selected.reachability.as_str() {
-                "REACHABLE" => (th().destructive, th().destructive_bg),
-                "UNREACHABLE" => (th().success, th().element),
-                _ => (th().warning, th().warning_bg),
-            };
+            let l_col_w = (bottom_cols[0].width as usize).saturating_sub(4);
+            let left_content = vec![
+                Line::from(vec![
+                    Span::styled(" IMPACT & CONTEXT ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" [CWE: {}] ", selected.cwe), Style::default().fg(th().text_dim)),
+                ]),
+                Line::from(vec![
+                    Span::styled("   summary    ", Style::default().fg(th().text_dim)),
+                    Span::styled(ellipsize(&selected.description, l_col_w * 2), Style::default().fg(th().text)),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled(" TRIAGE VERDICT   ", Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        format!(" {} · {} ", selected.triage_verdict, selected.reachability),
+                        Style::default().fg(reach_fg).bg(reach_bg).add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled("   reasoning  ", Style::default().fg(th().text_dim)),
+                    Span::styled(ellipsize(&reasoning, l_col_w.saturating_sub(15)), Style::default().fg(th().text_sub)),
+                ]),
+                Line::from(vec![
+                    Span::styled("   callpath   ", Style::default().fg(th().text_dim)),
+                    Span::styled(ellipsize(&call_chain, l_col_w.saturating_sub(15)), Style::default().fg(th().text_muted)),
+                ]),
+            ];
+            f.render_widget(Paragraph::new(left_content).wrap(Wrap { trim: false }), bottom_cols[0]);
 
-            if inner_detail.width >= 90 {
-                // Dual Column Minimalist Grid
-                let detail_cols = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([
-                        Constraint::Percentage(50),
-                        Constraint::Length(1), // Subtle vertical rule
-                        Constraint::Percentage(50),
-                    ])
-                    .split(inner_detail);
+            let divider_lines = vec![Line::from(Span::styled("│", Style::default().fg(th().border))); bottom_cols[1].height as usize];
+            f.render_widget(Paragraph::new(divider_lines), bottom_cols[1]);
 
-                let l_col_w = (detail_cols[0].width as usize).saturating_sub(4);
-                let l_val_w = l_col_w.saturating_sub(15).max(18);
-
-                let desc_clean = ellipsize(&selected.description, l_col_w * 2);
-                let reason_clean = ellipsize(&reasoning, l_val_w);
-                let path_clean = ellipsize(&call_chain, l_val_w);
-
-                // Left Column: Threat Context & Triage Verdict
-                let left_content = vec![
-                    Line::from(vec![
-                        Span::styled(" ◆ ", Style::default().fg(th().primary)),
-                        Span::styled("IMPACT & CONTEXT", Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("   summary    ", Style::default().fg(th().text_dim)),
-                        Span::styled(desc_clean, Style::default().fg(th().text)),
-                    ]),
-                    Line::raw(""),
-                    Line::from(vec![
-                        Span::styled(" ◆ ", Style::default().fg(th().primary)),
-                        Span::styled("TRIAGE VERDICT", Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
-                        Span::raw("  "),
-                        Span::styled(
-                            format!(" {} · {} ", selected.triage_verdict, selected.reachability),
-                            Style::default().fg(reach_fg).bg(reach_bg).add_modifier(Modifier::BOLD),
-                        ),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("   reasoning  ", Style::default().fg(th().text_dim)),
-                        Span::styled(reason_clean, Style::default().fg(th().text_sub)),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("   callpath   ", Style::default().fg(th().text_dim)),
-                        Span::styled(path_clean, Style::default().fg(th().text_muted)),
-                    ]),
-                ];
-                f.render_widget(Paragraph::new(left_content).wrap(Wrap { trim: false }), detail_cols[0]);
-
-                // Subtle Vertical Divider
-                let divider_lines = vec![Line::from(Span::styled("│", Style::default().fg(th().border))); inner_detail.height as usize];
-                f.render_widget(Paragraph::new(divider_lines), detail_cols[1]);
-
-                // Right Column: Source Location & Remediation
-                let r_col_w = (detail_cols[2].width as usize).saturating_sub(4);
-                let r_val_w = r_col_w.saturating_sub(15).max(18);
-
-                let snippet_raw = selected.snippet.trim();
-                let loc_clean = ellipsize_start(&format!("{}:{}", selected.file_path.display(), selected.line_number), r_val_w);
-                let snip_clean = if snippet_raw.is_empty() {
-                    "(source line omitted)".to_string()
-                } else {
-                    ellipsize(snippet_raw, r_val_w)
-                };
-                let rec_clean = ellipsize(&selected.recommendation, r_col_w * 2);
-
-                let right_content = vec![
-                    Line::from(vec![
-                        Span::styled(" ◆ ", Style::default().fg(th().text_muted)),
-                        Span::styled("SOURCE LOCATION", Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
-                        Span::raw("  "),
-                        Span::styled(format!(" L{} ", selected.line_number), Style::default().fg(th().text_sub).bg(th().element)),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("   file       ", Style::default().fg(th().text_dim)),
-                        Span::styled(loc_clean, Style::default().fg(th().text_sub)),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("   code       ", Style::default().fg(th().text_dim)),
-                        Span::styled(format!(" {} ", snip_clean), Style::default().fg(th().fg).bg(th().element)),
-                    ]),
-                    Line::raw(""),
-                    Line::from(vec![
-                        Span::styled(" ◆ ", Style::default().fg(th().success)),
-                        Span::styled("REMEDIATION", Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("   action     ", Style::default().fg(th().text_dim)),
-                        Span::styled("✓ ", Style::default().fg(th().success)),
-                        Span::styled(rec_clean, Style::default().fg(th().text)),
-                    ]),
-                ];
-                f.render_widget(Paragraph::new(right_content).wrap(Wrap { trim: false }), detail_cols[2]);
-            } else {
-                // Stacked Minimalist Layout for Narrow Viewports
-                let max_w = (inner_detail.width as usize).saturating_sub(16).max(15);
-                let stacked_content = vec![
-                    Line::from(vec![
-                        Span::styled("  summary   ", Style::default().fg(th().text_dim)),
-                        Span::styled(ellipsize(&selected.description, max_w), Style::default().fg(th().text)),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("  verdict   ", Style::default().fg(th().text_dim)),
-                        Span::styled(
-                            format!(" {} · {} ", selected.triage_verdict, selected.reachability),
-                            Style::default().fg(reach_fg).bg(reach_bg).add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(" "),
-                        Span::styled(ellipsize(&reasoning, max_w.saturating_sub(22).max(12)), Style::default().fg(th().text_sub)),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("  location  ", Style::default().fg(th().text_dim)),
-                        Span::styled(ellipsize_start(&format!("{}:{}", selected.file_path.display(), selected.line_number), max_w.saturating_sub(24).max(12)), Style::default().fg(th().text_sub)),
-                        Span::raw(" "),
-                        Span::styled(format!(" {} ", ellipsize(selected.snippet.trim(), 20)), Style::default().fg(th().fg).bg(th().element)),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("  remedy    ", Style::default().fg(th().text_dim)),
-                        Span::styled("✓ ", Style::default().fg(th().success)),
-                        Span::styled(ellipsize(&selected.recommendation, max_w.saturating_sub(2)), Style::default().fg(th().text)),
-                    ]),
-                ];
-                f.render_widget(Paragraph::new(stacked_content).wrap(Wrap { trim: false }), inner_detail);
-            }
+            let r_col_w = (bottom_cols[2].width as usize).saturating_sub(4);
+            let right_content = vec![
+                Line::from(vec![
+                    Span::styled(" REMEDIATION & FIX ", Style::default().fg(th().success).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(vec![
+                    Span::styled("   action     ", Style::default().fg(th().text_dim)),
+                    Span::styled("✓ ", Style::default().fg(th().success).add_modifier(Modifier::BOLD)),
+                    Span::styled(ellipsize(&selected.recommendation, r_col_w * 2), Style::default().fg(th().text)),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled(" QUICK ACTIONS ", Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(vec![
+                    Span::styled("   press ", Style::default().fg(th().text_dim)),
+                    Span::styled("[/patch]", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(" or switch to tab [3] to apply verified fix.", Style::default().fg(th().text_sub)),
+                ]),
+            ];
+            f.render_widget(Paragraph::new(right_content).wrap(Wrap { trim: false }), bottom_cols[2]);
         } else {
             let empty_text = vec![Line::from(vec![
                 Span::raw("  "),

@@ -959,7 +959,7 @@ impl App {
                 self.active_modal = ActiveModal::None;
                 false
             }
-            KeyCode::Char('c') | KeyCode::Char('a') => {
+            KeyCode::Char('c') | KeyCode::Char('C') => {
                 if let Some(p) = AiProvider::ALL.get(self.selected_provider_index) {
                     self.start_provider_setup_flow(*p);
                 }
@@ -1005,11 +1005,27 @@ impl App {
                 }
                 false
             }
-            KeyCode::Char(c @ '1'..='6') => {
+            KeyCode::Char(c @ '1'..='9') => {
                 let idx = (c as usize) - ('1' as usize);
                 if idx < AiProvider::ALL.len() {
                     self.selected_provider_index = idx;
                     self.active_provider = AiProvider::ALL[idx];
+                    self.config.provider = self.active_provider;
+                }
+                false
+            }
+            KeyCode::Char('0') => {
+                if 9 < AiProvider::ALL.len() {
+                    self.selected_provider_index = 9;
+                    self.active_provider = AiProvider::ALL[9];
+                    self.config.provider = self.active_provider;
+                }
+                false
+            }
+            KeyCode::Char('x' | 'X') => {
+                if 10 < AiProvider::ALL.len() {
+                    self.selected_provider_index = 10;
+                    self.active_provider = AiProvider::ALL[10];
                     self.config.provider = self.active_provider;
                 }
                 false
@@ -1581,6 +1597,16 @@ impl App {
                     self.active_provider = AiProvider::GoogleGemini;
                 } else if lower.contains("deepseek") {
                     self.active_provider = AiProvider::DeepSeek;
+                } else if lower.contains("groq") {
+                    self.active_provider = AiProvider::Groq;
+                } else if lower.contains("openrouter") {
+                    self.active_provider = AiProvider::OpenRouter;
+                } else if lower.contains("mistral") {
+                    self.active_provider = AiProvider::Mistral;
+                } else if lower.contains("together") {
+                    self.active_provider = AiProvider::TogetherAi;
+                } else if lower.contains("xai") || lower.contains("grok") {
+                    self.active_provider = AiProvider::XAi;
                 } else if lower.contains("ollama") {
                     self.active_provider = AiProvider::OllamaLocal;
                 }
@@ -1838,9 +1864,16 @@ impl App {
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {
                     handle.spawn(async move {
                         let reply = hub.query(&prompt_text).await;
+                        let (thought_opt, clean_text) = crate::core::agent::parse_ai_thinking_content(&reply);
+                        if let Some(thought) = thought_opt {
+                            let _ = sender.send(EngineMessage::Chat(ChatMessage::Thinking {
+                                agent: "orchestrator".to_string(),
+                                thought,
+                            }));
+                        }
                         let _ = sender.send(EngineMessage::Chat(ChatMessage::Agent {
                             sender: "orchestrator".to_string(),
-                            text: reply,
+                            text: clean_text,
                         }));
                     });
                 }

@@ -6,9 +6,11 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SkillFrontmatter {
+    #[serde(default)]
     pub skill_id: String,
+    #[serde(default)]
     pub name: String,
     pub tier: Option<String>,
     #[serde(default)]
@@ -37,19 +39,37 @@ impl Default for SkillRegistry {
 }
 
 impl SkillRegistry {
+    pub fn user_skills_dir() -> PathBuf {
+        if let Ok(override_dir) = std::env::var("ASTERISK_SKILLS_DIR") {
+            return PathBuf::from(override_dir);
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            PathBuf::from(home).join(".asterisk").join("skills")
+        } else {
+            PathBuf::from(".asterisk").join("skills")
+        }
+    }
+
     pub fn new() -> Self {
         let mut registry = Self {
             skills: Vec::new(),
             loaded_skills: HashMap::new(),
         };
 
-        // Try loading from default assets/builtin_skills directory
+        // 1. User Global Skills (~/.asterisk/skills/)
+        let user_skills = Self::user_skills_dir();
+        let _ = fs::create_dir_all(&user_skills);
+        if user_skills.exists() {
+            registry.load_skills_from_dir(&user_skills, "user-global");
+        }
+
+        // 2. Try loading from default assets/builtin_skills directory
         let asset_dir = Path::new("assets/builtin_skills");
         if asset_dir.exists() {
             registry.load_skills_from_dir(asset_dir, "default");
         }
 
-        // If no skills found in asset_dir, initialize default fallback skills
+        // 3. If no skills found, initialize default fallback skills
         if registry.skills.is_empty() {
             registry.init_fallback_skills();
         }
@@ -60,13 +80,19 @@ impl SkillRegistry {
     pub fn load_from_workspace(root: &Path) -> Self {
         let mut registry = Self::new();
 
-        // 1. Tier-2: User Custom Skills (.asterisk/skills/custom)
+        // 1. Workspace Skills (.asterisk/skills)
+        let ws_skills = root.join(".asterisk").join("skills");
+        if ws_skills.exists() {
+            registry.load_skills_from_dir(&ws_skills, "user-workspace");
+        }
+
+        // 2. User Custom Skills (.asterisk/skills/custom)
         let custom_dir = root.join(".asterisk").join("skills").join("custom");
         if custom_dir.exists() {
             registry.load_skills_from_dir(&custom_dir, "user-custom");
         }
 
-        // 2. Tier-3: Orchestrator Synthesized Skills (.asterisk/skills/synthesized)
+        // 3. Orchestrator Synthesized Skills (.asterisk/skills/synthesized)
         let synth_dir = root.join(".asterisk").join("skills").join("synthesized");
         if synth_dir.exists() {
             registry.load_skills_from_dir(&synth_dir, "orchestrator-synthesized");
@@ -118,46 +144,85 @@ impl SkillRegistry {
     }
 
     pub fn load_skills_from_dir(&mut self, dir: &Path, default_tier: &str) {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() && path.to_string_lossy().ends_with(".skill.md") {
-                    if let Ok(content) = fs::read_to_string(&path) {
-                        if let Some((frontmatter, _body)) = parse_skill_file(&content) {
-                            let skill_id = frontmatter.skill_id.clone();
-                            let name = frontmatter.name.clone();
-                            let tier = frontmatter.tier.clone().unwrap_or_else(|| default_tier.to_string());
-                            let category = match tier.as_str() {
-                                "user-custom" => "Custom Skill",
-                                "orchestrator-synthesized" => "Synthesized Skill",
-                                _ => "Built-in Skill",
+        use walkdir::WalkDir;
+
+        for entry in WalkDir::new(dir).max_depth(4).into_iter().filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_file() {
+                let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if fname.ends_with(".skill.md") || fname.ends_with(".md") {
+                    if let Ok(content) = fs::read_to_string(path) {
+                        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("custom-skill");
+                        let clean_stem = stem.strip_suffix(".skill").unwrap_or(stem);
+
+                        let (frontmatter, _body) = if let Some((mut fm, body)) = parse_skill_file(&content) {
+                            if fm.skill_id.is_empty() {
+                                fm.skill_id = if !fm.name.is_empty() {
+                                    fm.name.to_lowercase().replace(' ', "-")
+                                } else {
+                                    clean_stem.to_string()
+                                };
                             }
-                            .to_string();
-
-                            let desc = format!("Target: {}", frontmatter.target_languages.join(", "));
-
-                            self.loaded_skills.insert(
-                                skill_id.clone(),
-                                SkillEntry {
-                                    frontmatter,
-                                    file_path: Some(path.clone()),
-                                    cached_body: None,
-                                },
-                            );
-
-                            if let Some(existing) = self.skills.iter_mut().find(|s| s.id == skill_id) {
-                                existing.name = name;
-                                existing.category = category;
-                            } else {
-                                self.skills.push(InteractiveSkill {
-                                    id: skill_id,
-                                    name,
-                                    category,
-                                    description: desc,
-                                    invocations: 0,
-                                    active: true,
-                                });
+                            if fm.name.is_empty() {
+                                fm.name = clean_stem.replace(['-', '_'], " ");
                             }
+                            (fm, body)
+                        } else {
+                            // Support standard Markdown skills without YAML frontmatter
+                            let title = content.lines()
+                                .find(|l| l.trim().starts_with('#'))
+                                .map(|l| l.trim().trim_start_matches('#').trim().to_string())
+                                .unwrap_or_else(|| clean_stem.replace(['-', '_'], " "));
+                            let fm = SkillFrontmatter {
+                                skill_id: clean_stem.to_string(),
+                                name: title,
+                                tier: Some(default_tier.to_string()),
+                                target_languages: vec!["all".to_string()],
+                                trigger_conditions: None,
+                                required_mcp_tools: Vec::new(),
+                            };
+                            (fm, content.clone())
+                        };
+
+                        let skill_id = frontmatter.skill_id.clone();
+                        let name = frontmatter.name.clone();
+                        let tier = frontmatter.tier.clone().unwrap_or_else(|| default_tier.to_string());
+                        let category = match tier.as_str() {
+                            "user-global" => "Global Skill (~/.asterisk/skills)",
+                            "user-workspace" => "Workspace Skill",
+                            "user-custom" => "Custom Skill",
+                            "orchestrator-synthesized" => "Synthesized Skill",
+                            _ => "Built-in Skill",
+                        }
+                        .to_string();
+
+                        let desc = if frontmatter.target_languages.is_empty() || frontmatter.target_languages == ["all"] {
+                            format!("Custom security skill loaded from {}", path.display())
+                        } else {
+                            format!("Target: {}", frontmatter.target_languages.join(", "))
+                        };
+
+                        self.loaded_skills.insert(
+                            skill_id.clone(),
+                            SkillEntry {
+                                frontmatter,
+                                file_path: Some(path.to_path_buf()),
+                                cached_body: None,
+                            },
+                        );
+
+                        if let Some(existing) = self.skills.iter_mut().find(|s| s.id == skill_id) {
+                            existing.name = name;
+                            existing.category = category;
+                        } else {
+                            self.skills.push(InteractiveSkill {
+                                id: skill_id,
+                                name,
+                                category,
+                                description: desc,
+                                invocations: 0,
+                                active: true,
+                            });
                         }
                     }
                 }

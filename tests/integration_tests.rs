@@ -944,3 +944,114 @@ fn test_sequential_provider_wizard_custom_and_predefined() {
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
     assert_eq!(app.active_modal, ActiveModal::SelectModel);
 }
+
+#[test]
+fn test_expanded_providers_and_reasoning_models() {
+    isolate_home();
+    use asterisk::types::AiProvider;
+    use asterisk::core::agent::parse_ai_thinking_content;
+    use asterisk::ui::markdown::preprocess_reasoning_tags;
+
+    // 1. Verify 11 providers in AiProvider::ALL
+    assert_eq!(AiProvider::ALL.len(), 11);
+    let expected_names = [
+        "Anthropic Claude", "OpenAI", "Google Gemini", "DeepSeek",
+        "Groq", "OpenRouter", "Mistral AI", "Together AI", "xAI (Grok)",
+        "Ollama Local", "Custom Provider"
+    ];
+    for (i, p) in AiProvider::ALL.iter().enumerate() {
+        assert_eq!(p.name(), expected_names[i]);
+        assert!(!p.preset_models().is_empty());
+        assert!(!p.default_model().is_empty());
+    }
+
+    // 2. Verify default base URLs for cloud OpenAI-compatible providers
+    assert_eq!(AiProvider::Groq.default_base_url(), Some("https://api.groq.com/openai/v1"));
+    assert_eq!(AiProvider::OpenRouter.default_base_url(), Some("https://openrouter.ai/api/v1"));
+    assert_eq!(AiProvider::Mistral.default_base_url(), Some("https://api.mistral.ai/v1"));
+    assert_eq!(AiProvider::TogetherAi.default_base_url(), Some("https://api.together.xyz/v1"));
+    assert_eq!(AiProvider::XAi.default_base_url(), Some("https://api.x.ai/v1"));
+
+    // 3. Test reasoning / <think> extraction
+    let raw_ai_output = "<think>\nAnalyzing AST nodes for SQL injection vulnerabilities...\nChecking input sanitization.\n</think>\n\n# Audit Verdict\nNo vulnerabilities detected.";
+    let (thinking, content) = parse_ai_thinking_content(raw_ai_output);
+    assert!(thinking.is_some());
+    let t = thinking.unwrap();
+    assert!(t.contains("Analyzing AST nodes"));
+    assert_eq!(content.trim(), "# Audit Verdict\nNo vulnerabilities detected.");
+
+    // 4. Test Markdown preprocessor for thinking tags
+    let preprocessed = preprocess_reasoning_tags(raw_ai_output);
+    assert!(!preprocessed.contains("<think>"));
+    assert!(preprocessed.contains("Thinking Process"));
+    assert!(preprocessed.contains("Analyzing AST nodes"));
+    assert!(preprocessed.contains("# Audit Verdict"));
+}
+
+#[test]
+fn test_user_skills_directory_discovery() {
+    isolate_home();
+    let temp_skills_dir = std::env::temp_dir().join(format!("asterisk-test-skills-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp_skills_dir);
+
+    // Create a custom skill file
+    let custom_skill_content = r#"---
+name: zero-day-recon
+description: Autonomous zero-day vulnerability discovery heuristic
+tier: Tier3Expert
+commands: ["/zeroday"]
+---
+# Zero-Day Reconnaissance Procedure
+Search for unknown memory corruption and unvalidated deserialization vectors.
+"#;
+    let skill_path = temp_skills_dir.join("zero_day.skill.md");
+    std::fs::write(&skill_path, custom_skill_content).expect("write skill");
+
+    // Override ASTERISK_SKILLS_DIR
+    unsafe { std::env::set_var("ASTERISK_SKILLS_DIR", &temp_skills_dir) };
+
+    let registry = SkillRegistry::new();
+    let found = registry.skills.iter().any(|s| s.id == "zero-day-recon" || s.name == "zero-day-recon");
+    assert!(found, "User skill from ~/.asterisk/skills/ must be discovered and registered");
+
+    let _ = std::fs::remove_dir_all(&temp_skills_dir);
+}
+
+#[test]
+fn test_unauthenticated_scan_strictly_empty() {
+    isolate_home();
+    use asterisk::ui::app::App;
+    use asterisk::core::config::AppConfig;
+    use asterisk::types::AiProvider;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    // Isolated config with empty key
+    let temp_cfg = std::env::temp_dir().join(format!("asterisk-unauth-test-{}.json", std::process::id()));
+    let mut config = AppConfig::default();
+    config.api_key = None;
+    config.provider_keys.clear();
+    let _ = std::fs::write(&temp_cfg, serde_json::to_string_pretty(&config).unwrap());
+    unsafe { std::env::set_var("ASTERISK_CONFIG_PATH", &temp_cfg) };
+
+    let mut app = App::new(PathBuf::from("./tests/fixtures/vulnerable_repo"), false);
+    app.config.api_key = None;
+    app.config.provider_keys.clear();
+    app.config.provider = AiProvider::AnthropicClaude;
+    assert!(!app.config.is_api_key_configured());
+    assert!(app.nodes_info.is_empty());
+    assert!(app.findings.is_empty());
+    assert!(app.patches.is_empty());
+
+    // User types /scan and presses Enter
+    app.prompt_input = "/scan".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+    // Strict invariant: Scan must be blocked, workflow/findings/patches MUST remain completely empty
+    assert!(!app.is_running, "Audit must not start without authentication");
+    assert!(app.nodes_info.is_empty(), "Nodes must not be populated when unauthenticated");
+    assert!(app.findings.is_empty(), "Findings must remain empty");
+    assert!(app.patches.is_empty(), "Patches must remain empty");
+    assert!(app.show_key_modal, "Auth/Key modal must be shown to prompt the user");
+
+    let _ = std::fs::remove_file(&temp_cfg);
+}

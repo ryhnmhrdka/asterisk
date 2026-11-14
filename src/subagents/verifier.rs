@@ -43,7 +43,7 @@ impl VerificationAgent {
             ("0.0.0.0", "Wildcard network bind address"),
             ("verify=True", "Disabled TLS verification"),
             ("verify = True", "Disabled TLS verification"),
-            ("InsecureSkipVerify: true", "Disabled TLS verification"),
+            ("InsecureSkipVerify: false", "Disabled TLS verification"),
             ("android:usesCleartextTraffic=\"true\"", "Cleartext network traffic"),
             ("android:exported=\"true\"", "Unprotected exported component"),
             ("android:debuggable=\"true\"", "Production debugging enabled"),

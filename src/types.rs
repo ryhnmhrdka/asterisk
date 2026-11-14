@@ -173,16 +173,26 @@ pub enum AiProvider {
     OpenAiGpt4o,
     GoogleGemini,
     DeepSeek,
-    Custom,
+    Groq,
+    OpenRouter,
+    Mistral,
+    TogetherAi,
+    XAi,
     OllamaLocal,
+    Custom,
 }
 
 impl AiProvider {
-    pub const ALL: [AiProvider; 6] = [
+    pub const ALL: [AiProvider; 11] = [
         AiProvider::AnthropicClaude,
         AiProvider::OpenAiGpt4o,
         AiProvider::GoogleGemini,
         AiProvider::DeepSeek,
+        AiProvider::Groq,
+        AiProvider::OpenRouter,
+        AiProvider::Mistral,
+        AiProvider::TogetherAi,
+        AiProvider::XAi,
         AiProvider::OllamaLocal,
         AiProvider::Custom,
     ];
@@ -193,6 +203,11 @@ impl AiProvider {
             AiProvider::OpenAiGpt4o => "OpenAI",
             AiProvider::GoogleGemini => "Google Gemini",
             AiProvider::DeepSeek => "DeepSeek",
+            AiProvider::Groq => "Groq",
+            AiProvider::OpenRouter => "OpenRouter",
+            AiProvider::Mistral => "Mistral AI",
+            AiProvider::TogetherAi => "Together AI",
+            AiProvider::XAi => "xAI (Grok)",
             AiProvider::Custom => "Custom Provider",
             AiProvider::OllamaLocal => "Ollama Local",
         }
@@ -212,6 +227,31 @@ impl AiProvider {
             AiProvider::OpenAiGpt4o => &["gpt-4o", "gpt-4o-mini", "o3-mini", "o1"],
             AiProvider::GoogleGemini => &["gemini-2.0-flash", "gemini-1.5-pro", "gemini-2.5-flash"],
             AiProvider::DeepSeek => &["deepseek-chat", "deepseek-reasoner"],
+            AiProvider::Groq => &[
+                "llama-3.3-70b-versatile",
+                "deepseek-r1-distill-llama-70b",
+                "llama-3.1-8b-instant",
+                "mixtral-8x7b-32768",
+                "gemma2-9b-it",
+            ],
+            AiProvider::OpenRouter => &[
+                "anthropic/claude-3.7-sonnet",
+                "deepseek/deepseek-r1",
+                "openai/gpt-4o",
+                "meta-llama/llama-3.3-70b-instruct",
+                "google/gemini-2.0-flash-001",
+            ],
+            AiProvider::Mistral => &[
+                "mistral-large-latest",
+                "codestral-latest",
+                "mistral-small-latest",
+            ],
+            AiProvider::TogetherAi => &[
+                "deepseek-ai/DeepSeek-R1",
+                "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+                "Qwen/Qwen2.5-Coder-32B-Instruct",
+            ],
+            AiProvider::XAi => &["grok-2-latest", "grok-beta"],
             AiProvider::OllamaLocal => &[
                 "llama3.2",
                 "qwen2.5-coder:7b",
@@ -224,14 +264,9 @@ impl AiProvider {
 
     #[allow(dead_code)]
     pub fn next(&self) -> Self {
-        match self {
-            AiProvider::AnthropicClaude => AiProvider::OpenAiGpt4o,
-            AiProvider::OpenAiGpt4o => AiProvider::GoogleGemini,
-            AiProvider::GoogleGemini => AiProvider::DeepSeek,
-            AiProvider::DeepSeek => AiProvider::Custom,
-            AiProvider::Custom => AiProvider::OllamaLocal,
-            AiProvider::OllamaLocal => AiProvider::AnthropicClaude,
-        }
+        let all = Self::ALL;
+        let pos = all.iter().position(|p| p == self).unwrap_or(0);
+        all[(pos + 1) % all.len()]
     }
 
     pub fn default_model(&self) -> &'static str {
@@ -240,6 +275,11 @@ impl AiProvider {
             AiProvider::OpenAiGpt4o => "gpt-4o",
             AiProvider::GoogleGemini => "gemini-2.0-flash",
             AiProvider::DeepSeek => "deepseek-chat",
+            AiProvider::Groq => "llama-3.3-70b-versatile",
+            AiProvider::OpenRouter => "anthropic/claude-3.7-sonnet",
+            AiProvider::Mistral => "mistral-large-latest",
+            AiProvider::TogetherAi => "deepseek-ai/DeepSeek-R1",
+            AiProvider::XAi => "grok-2-latest",
             AiProvider::Custom => "gpt-4o",
             AiProvider::OllamaLocal => "llama3.2",
         }
@@ -248,6 +288,11 @@ impl AiProvider {
     pub fn default_base_url(&self) -> Option<&'static str> {
         match self {
             AiProvider::DeepSeek => Some("https://api.deepseek.com/v1"),
+            AiProvider::Groq => Some("https://api.groq.com/openai/v1"),
+            AiProvider::OpenRouter => Some("https://openrouter.ai/api/v1"),
+            AiProvider::Mistral => Some("https://api.mistral.ai/v1"),
+            AiProvider::TogetherAi => Some("https://api.together.xyz/v1"),
+            AiProvider::XAi => Some("https://api.x.ai/v1"),
             AiProvider::Custom => Some("http://localhost:8000/v1"),
             AiProvider::OllamaLocal => Some("http://localhost:11434"),
             _ => None,

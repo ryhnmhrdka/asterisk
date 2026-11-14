@@ -114,19 +114,37 @@ impl SecurityAgentHub {
                 }
             }
 
-            AiProvider::DeepSeek => {
+            AiProvider::DeepSeek
+            | AiProvider::Groq
+            | AiProvider::OpenRouter
+            | AiProvider::Mistral
+            | AiProvider::TogetherAi
+            | AiProvider::XAi => {
+                let default_url = self.config.provider.default_base_url().unwrap_or("https://api.openai.com/v1");
+                let prov_name = self.config.provider.name();
                 let api_key = match self.config.get_api_key() {
                     Some(k) if !k.is_empty() => k,
                     _ => {
-                        return "⚠️ **DeepSeek: API Key Missing**\nPlease configure your key by typing `/key <your_api_key>` in the chat prompt, or export `DEEPSEEK_API_KEY=\"...\"` in your shell environment.".to_string();
+                        return format!(
+                            "⚠️ **{prov_name}: API Key Missing**\nPlease configure your key by typing `/key <your_api_key>` in the chat prompt, or export `{}_API_KEY=\"...\"` in your shell environment.",
+                            match self.config.provider {
+                                AiProvider::DeepSeek => "DEEPSEEK",
+                                AiProvider::Groq => "GROQ",
+                                AiProvider::OpenRouter => "OPENROUTER",
+                                AiProvider::Mistral => "MISTRAL",
+                                AiProvider::TogetherAi => "TOGETHER",
+                                AiProvider::XAi => "XAI",
+                                _ => "API",
+                            }
+                        );
                     }
                 };
 
                 let base_url = self
                     .config
                     .get_base_url()
-                    .unwrap_or_else(|| "https://api.deepseek.com/v1".to_string());
-                let openai_cfg = OpenAIConfig::new(api_key).with_base_url(base_url);
+                    .unwrap_or_else(|| default_url.to_string());
+                let openai_cfg = OpenAIConfig::new(api_key).with_base_url(base_url.clone());
                 let client = openai_cfg.client();
                 let model_name = self.config.get_model();
                 let model = client.completion(model_name.clone());
@@ -135,8 +153,8 @@ impl SecurityAgentHub {
                 match model.call(req).await {
                     Ok(res) => extract_completion_text(&res),
                     Err(e) => format!(
-                        "⚠️ **DeepSeek API Request Failed** (Model: `{}`)\nError: `{}`\nVerify your API key with `/key`.",
-                        model_name, e
+                        "⚠️ **{prov_name} API Request Failed** (Model: `{}`)\nEndpoint: `{}`\nError: `{}`\nVerify your API key with `/key` or change model with `/model`.",
+                        model_name, base_url, e
                     ),
                 }
             }
@@ -210,6 +228,54 @@ fn extract_completion_text(res: &rig::completion::CompletionResponse) -> String 
     } else {
         text
     }
+}
+
+/// Parses reasoning tags like `<think>...</think>`, `<thought>...</thought>`, or `<reasoning>...</reasoning>`
+/// commonly produced by reasoning models (DeepSeek-R1, Qwen Reasoning, Claude Thinking, etc.).
+/// Returns `(Option<ThinkingContent>, CleanResponseText)`.
+pub fn parse_ai_thinking_content(raw: &str) -> (Option<String>, String) {
+    let lower = raw.to_lowercase();
+    let tags = [
+        ("<think>", "</think>"),
+        ("<thought>", "</thought>"),
+        ("<reasoning>", "</reasoning>"),
+    ];
+
+    for (open_tag, close_tag) in tags {
+        if let Some(start_idx) = lower.find(open_tag) {
+            let content_start = start_idx + open_tag.len();
+            if let Some(end_offset) = lower[content_start..].find(close_tag) {
+                let content_end = content_start + end_offset;
+                let thought = raw[content_start..content_end].trim().to_string();
+                let mut remaining = String::new();
+                remaining.push_str(&raw[..start_idx]);
+                remaining.push_str(&raw[content_end + close_tag.len()..]);
+                let clean = remaining.trim().to_string();
+                return (
+                    Some(thought),
+                    if clean.is_empty() {
+                        "Analysis completed.".to_string()
+                    } else {
+                        clean
+                    },
+                );
+            } else {
+                // Open tag without closing tag
+                let thought = raw[content_start..].trim().to_string();
+                let clean = raw[..start_idx].trim().to_string();
+                return (
+                    Some(thought),
+                    if clean.is_empty() {
+                        "Reasoning in progress...".to_string()
+                    } else {
+                        clean
+                    },
+                );
+            }
+        }
+    }
+
+    (None, raw.to_string())
 }
 
 #[cfg(test)]

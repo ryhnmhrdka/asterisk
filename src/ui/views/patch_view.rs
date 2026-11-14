@@ -197,9 +197,9 @@ impl PatchView {
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(th().border))
             .title(Line::from(vec![
-                Span::styled(" [unified git diff] ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" Code Diff ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
                 if let Some(patch) = patches.get(selected_index) {
-                    Span::styled(format!(":: {} ", patch.target_file.display()), Style::default().fg(th().fg))
+                    Span::styled(format!(" {} ", patch.target_file.display()), Style::default().fg(th().fg))
                 } else {
                     Span::raw("")
                 },
@@ -210,19 +210,19 @@ impl PatchView {
             let mut lines = Vec::new();
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled("● REMEDIATION INTENT: ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                Span::styled("Remediation: ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
                 Span::styled(&patch.explanation, Style::default().fg(th().text)),
             ]));
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled("● SAFETY GATES:       ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                Span::styled("Status:      ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
                 Span::styled(
-                    if patch.unit_test_passed { "✓ Worktree Unit Test Passed" } else { "… Worktree Unit Test Pending" },
+                    if patch.unit_test_passed { "✓ Unit Test Passed" } else { "… Unit Test Pending" },
                     Style::default().fg(if patch.unit_test_passed { th().success } else { th().text_sub }),
                 ),
                 Span::raw("  •  "),
                 Span::styled(
-                    if patch.safe_outputs_passed { "✓ Safe Outputs Verified" } else { "! Safe Outputs Unverified" },
+                    if patch.safe_outputs_passed { "✓ Safety Gates Verified" } else { "! Safety Gates Unverified" },
                     Style::default().fg(if patch.safe_outputs_passed { th().primary } else { th().warning }),
                 ),
             ]));
@@ -259,18 +259,17 @@ impl PatchView {
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(th().border))
             .title(Line::from(vec![
-                Span::styled(" [security verification unit test] ", Style::default().fg(th().success).add_modifier(Modifier::BOLD)),
-                Span::styled(":: isolated worktree sandbox ", Style::default().fg(th().text_muted)),
+                Span::styled(" Verification Unit Test ", Style::default().fg(th().success).add_modifier(Modifier::BOLD)),
+                if let Some(patch) = patches.get(selected_index) {
+                    Span::styled(format!(" {} ", patch.target_file.display()), Style::default().fg(th().text_muted))
+                } else {
+                    Span::raw("")
+                },
             ]))
             .style(Style::default().bg(th().bg_alt));
 
         let test_lines = if let Some(patch) = patches.get(selected_index) {
             let mut lines = Vec::new();
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled("// automated security verification unit test (worktree sandbox validated)", Style::default().fg(th().text_dim)),
-            ]));
-            lines.push(Line::raw(""));
             for l in patch.unit_test_code.lines() {
                 lines.push(Line::from(vec![
                     Span::raw("  "),

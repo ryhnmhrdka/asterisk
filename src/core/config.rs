@@ -41,6 +41,9 @@ impl Default for AppConfig {
 
 impl AppConfig {
     pub fn config_path() -> PathBuf {
+        if let Ok(override_path) = env::var("ASTERISK_CONFIG_PATH") {
+            return PathBuf::from(override_path);
+        }
         let local_path = PathBuf::from(".asterisk").join("config.json");
         if local_path.exists() {
             return local_path;
@@ -142,6 +145,11 @@ impl AppConfig {
             AiProvider::OpenAiGpt4o => env::var("OPENAI_API_KEY").ok(),
             AiProvider::GoogleGemini => env::var("GEMINI_API_KEY").ok(),
             AiProvider::DeepSeek => env::var("DEEPSEEK_API_KEY").ok(),
+            AiProvider::Groq => env::var("GROQ_API_KEY").ok(),
+            AiProvider::OpenRouter => env::var("OPENROUTER_API_KEY").ok(),
+            AiProvider::Mistral => env::var("MISTRAL_API_KEY").ok(),
+            AiProvider::TogetherAi => env::var("TOGETHER_API_KEY").ok(),
+            AiProvider::XAi => env::var("XAI_API_KEY").ok(),
             AiProvider::Custom => env::var("CUSTOM_API_KEY")
                 .or_else(|_| env::var("AI_API_KEY"))
                 .or_else(|_| env::var("OPENAI_API_KEY"))

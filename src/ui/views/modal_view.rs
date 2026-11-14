@@ -71,8 +71,8 @@ impl ModalView {
         selected_index: usize,
         config: &crate::core::AppConfig,
     ) -> ModalClickTargets {
-        let modal_width = 72.min(area.width.saturating_sub(4));
-        let modal_height = 15.min(area.height.saturating_sub(2));
+        let modal_width = 74.min(area.width.saturating_sub(4));
+        let modal_height = 16.min(area.height.saturating_sub(2));
 
         let x = (area.width.saturating_sub(modal_width)) / 2;
         let y = (area.height.saturating_sub(modal_height)) / 2;
@@ -108,16 +108,29 @@ impl ModalView {
             btn_cancel: None,
         };
 
-        let custom_name = config.get_provider_display_name(AiProvider::Custom);
-        let custom_label = format!("6. {custom_name}");
-        let providers = [
-            (AiProvider::AnthropicClaude, "1. Anthropic Claude".to_string()),
-            (AiProvider::OpenAiGpt4o, "2. OpenAI".to_string()),
-            (AiProvider::GoogleGemini, "3. Google Gemini".to_string()),
-            (AiProvider::DeepSeek, "4. DeepSeek".to_string()),
-            (AiProvider::OllamaLocal, "5. Ollama (Local)".to_string()),
-            (AiProvider::Custom, custom_label),
-        ];
+        let mut providers = Vec::new();
+        for (i, p) in AiProvider::ALL.iter().enumerate() {
+            let label = if *p == AiProvider::Custom {
+                let custom_name = config.get_provider_display_name(AiProvider::Custom);
+                if i < 9 {
+                    format!("{}. {}", i + 1, custom_name)
+                } else if i == 9 {
+                    format!("0. {}", custom_name)
+                } else {
+                    format!("x. {}", custom_name)
+                }
+            } else {
+                let p_name = p.name();
+                if i < 9 {
+                    format!("{}. {}", i + 1, p_name)
+                } else if i == 9 {
+                    format!("0. {}", p_name)
+                } else {
+                    format!("x. {}", p_name)
+                }
+            };
+            providers.push((*p, label));
+        }
 
         let mut lines = Vec::new();
         let list_area = inner_chunks[0];
@@ -166,7 +179,7 @@ impl ModalView {
         // Adaptive action bar: never exceeds the inner card width
         let footer_line = hint_line(
             &[
-                ("[1-6/↑↓]", "Select"),
+                ("[1-9,0,x/↑↓]", "Select"),
                 ("[Enter]", "Setup/Hub"),
                 ("[c]", "Wizard"),
                 ("[k]", "Key"),

@@ -66,7 +66,7 @@ impl SkillsView {
             .style(Style::default().bg(th().surface))
             .title(Line::from(vec![
                 Span::styled(
-                    " [search skills] ",
+                    " search skills ",
                     Style::default()
                         .fg(if is_search_active {
                             th().primary
@@ -75,35 +75,25 @@ impl SkillsView {
                         })
                         .add_modifier(Modifier::BOLD),
                 ),
-            ]))
-            .title_bottom(Line::from(vec![
-                Span::styled(
-                    if is_search_active {
-                        " [typing mode :: press Esc to exit / Enter to confirm] "
-                    } else {
-                        " [press '/' to search :: Esc to clear] "
-                    },
-                    Style::default().fg(th().border_hi),
-                ),
             ]));
 
         let search_line = if search_query.is_empty() {
             if is_search_active {
                 Line::from(vec![
-                    Span::styled(" [?] search: ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled("  search: ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
                     Span::styled("█", Style::default().fg(th().primary)),
                     Span::styled(" Type skill name, id, category, or capability...", Style::default().fg(th().border_hi)),
                 ])
             } else {
                 Line::from(vec![
-                    Span::styled(" [?] search: ", Style::default().fg(th().text_muted)),
-                    Span::styled("Type '/' to filter skills by name, ID, or capability... ", Style::default().fg(th().border_hi)),
+                    Span::styled("  search: ", Style::default().fg(th().text_muted)),
+                    Span::styled("Filter skills by name, ID, or capability... ", Style::default().fg(th().border_hi)),
                     Span::styled(count_badge, Style::default().fg(th().text_dim)),
                 ])
             }
         } else {
             Line::from(vec![
-                Span::styled(" [?] search: ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                Span::styled("  search: ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
                 Span::styled(search_query, Style::default().fg(th().fg).add_modifier(Modifier::BOLD)),
                 if is_search_active {
                     Span::styled("█", Style::default().fg(th().primary))

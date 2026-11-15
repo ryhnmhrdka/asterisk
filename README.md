@@ -1,9 +1,19 @@
 ![logo](https://res.cloudinary.com/erwj1yyu/image/upload/v1794731959/logo_2_l4k5e6.png)
 
-[![Rust](https://img.shields.io/badge/rust-2024_edition-orange.svg)](https://www.rust-lang.org/)
-[![Ratatui](https://img.shields.io/badge/tui-ratatui_v0.30-blue.svg)](https://ratatui.rs/)
-[![Storage](https://img.shields.io/badge/storage-SQLite_WAL-informational.svg)](https://www.sqlite.org/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+<p align="center">
+  <a href="https://www.rust-lang.org/">
+    <img src="https://img.shields.io/badge/rust-2024_edition-orange.svg" />
+  </a>
+  <a href="https://ratatui.rs/">
+    <img src="https://img.shields.io/badge/tui-ratatui_v0.30-blue.svg" />
+  </a>
+  <a href="https://www.sqlite.org/">
+    <img src="https://img.shields.io/badge/storage-SQLite_WAL-informational.svg" />
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-MIT-green.svg" />
+  </a>
+</p>
 
 
 **Asterisk** is a terminal-native, autonomous security harness that inspects, triages, and hardens codebases directly on local developer machines before code is committed, built, or deployed.

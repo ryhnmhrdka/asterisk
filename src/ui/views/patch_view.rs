@@ -226,13 +226,13 @@ impl PatchView {
                 ])
             } else {
                 Line::from(vec![
-                    Span::styled("click buttons or press [a] / [r]", Style::default().fg(th().text_muted)),
+                    Span::styled("click buttons or press [Ctrl+A] / [Ctrl+R]", Style::default().fg(th().text_muted)),
                 ])
             };
             f.render_widget(Paragraph::new(status_text), msg_rect);
 
-            btn_apply = Some(apply_rect);
-            btn_rollback = Some(rollback_rect);
+            btn_apply = Some(Rect::new(apply_rect.x, action_bar_area.y, apply_rect.width, action_bar_area.height));
+            btn_rollback = Some(Rect::new(rollback_rect.x, action_bar_area.y, rollback_rect.width, action_bar_area.height));
         }
 
         // Diff Viewer

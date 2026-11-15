@@ -1984,14 +1984,10 @@ impl App {
                 self.toggle_pause_total();
             }
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if !self.patches.is_empty() {
-                    self.apply_current_patch();
-                }
+                self.apply_current_patch();
             }
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if !self.patches.is_empty() {
-                    self.rollback_current_patch();
-                }
+                self.rollback_current_patch();
             }
             KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let t = crate::ui::theme::cycle_theme();
@@ -2093,15 +2089,11 @@ impl App {
                 return false;
             }
             KeyCode::Char('a') if self.focused_pane == FocusedPane::Workflow && self.current_tab == 2 => {
-                if !self.patches.is_empty() {
-                    self.apply_current_patch();
-                }
+                self.apply_current_patch();
                 return false;
             }
             KeyCode::Char('r') if self.focused_pane == FocusedPane::Workflow && self.current_tab == 2 => {
-                if !self.patches.is_empty() {
-                    self.rollback_current_patch();
-                }
+                self.rollback_current_patch();
                 return false;
             }
             KeyCode::Char(c)
@@ -2681,44 +2673,72 @@ impl App {
     }
 
     pub fn apply_current_patch(&mut self) {
+        if self.patches.is_empty() {
+            self.action_msg = Some("no patches available — run /scan first".to_string());
+            self.chat_messages.push(ChatMessage::System(
+                "No patches available yet. Run `/scan` and confirm with `y` first so AutoHardeningAgent can synthesize patches.".to_string(),
+            ));
+            return;
+        }
+        if self.selected_patch_row >= self.patches.len() {
+            self.selected_patch_row = 0;
+        }
         if let Some(patch) = self.patches.get_mut(self.selected_patch_row) {
             let finding_id = patch.finding_id.clone();
             match AutoHardeningAgent::apply_patch(patch) {
                 Ok(()) => {
-                    self.action_msg = Some(format!("applied patch {}", patch.id));
+                    let patch_id = patch.id.clone();
+                    let target_display = patch.target_file.display().to_string();
+                    self.action_msg = Some(format!("applied patch {patch_id}"));
                     self.chat_messages.push(ChatMessage::Agent {
                         sender: "auto_hardening".to_string(),
-                        text: format!("applied hardening patch {} to disk.", patch.id),
+                        text: format!("✓ Applied hardening patch `{patch_id}` to `{target_display}`."),
                     });
                     if let Some(f) = self.findings.iter_mut().find(|f| f.id == finding_id) {
                         f.patched = true;
                     }
                     self.check_defense_gate_status();
+                    self.persist_current_session();
                 }
                 Err(e) => {
                     self.action_msg = Some(format!("patch error: {e}"));
+                    self.chat_messages.push(ChatMessage::System(format!("⚠️ Patch error: {e}")));
                 }
             }
         }
     }
 
     pub fn rollback_current_patch(&mut self) {
+        if self.patches.is_empty() {
+            self.action_msg = Some("no patches available to rollback".to_string());
+            self.chat_messages.push(ChatMessage::System(
+                "No patches available to rollback. Run `/scan` first.".to_string(),
+            ));
+            return;
+        }
+        if self.selected_patch_row >= self.patches.len() {
+            self.selected_patch_row = 0;
+        }
         if let Some(patch) = self.patches.get_mut(self.selected_patch_row) {
             let finding_id = patch.finding_id.clone();
             match AutoHardeningAgent::rollback_patch(patch) {
                 Ok(()) => {
-                    self.action_msg = Some(format!("rolled back {}", patch.id));
+                    let patch_id = patch.id.clone();
+                    let target_display = patch.target_file.display().to_string();
+                    self.action_msg = Some(format!("rolled back {patch_id}"));
                     self.chat_messages.push(ChatMessage::Agent {
                         sender: "auto_hardening".to_string(),
-                        text: format!("rolled back patch {}.", patch.id),
+                        text: format!("↩ Rolled back patch `{patch_id}` in `{target_display}`."),
                     });
                     if let Some(f) = self.findings.iter_mut().find(|f| f.id == finding_id) {
                         f.patched = false;
                     }
                     self.check_defense_gate_status();
+                    self.persist_current_session();
                 }
                 Err(e) => {
                     self.action_msg = Some(format!("rollback error: {e}"));
+                    self.chat_messages.push(ChatMessage::System(format!("⚠️ Rollback error: {e}")));
                 }
             }
         }
@@ -3048,7 +3068,7 @@ impl App {
                         }
                     }
                     if in_rect(patch_targets.list_area, col, row) {
-                        let clicked_patch = (row.saturating_sub(patch_targets.list_area.y)) as usize / 3;
+                        let clicked_patch = (row.saturating_sub(patch_targets.list_area.y)) as usize / 4;
                         if clicked_patch < self.patches.len() {
                             self.selected_patch_row = clicked_patch;
                             return;

@@ -204,15 +204,6 @@ impl GraphView {
                 Span::styled(" ◈ Architecture & Autonomous Flow Guide ", Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
             ]));
 
-        let spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        let spinner_idx = (std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-            / 80) as usize
-            % spinner_frames.len();
-        let spinner = spinner_frames[spinner_idx];
-
         let legend_text = vec![
             Line::from(vec![
                 Span::styled("  ROLES:  ", Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
@@ -232,7 +223,7 @@ impl GraphView {
             ]),
             Line::from(vec![
                 Span::styled("  STATES: ", Style::default().fg(th().text_muted).add_modifier(Modifier::BOLD)),
-                Span::styled(format!("{spinner} running (live)"), Style::default().fg(th().success)),
+                Span::styled("◐ running", Style::default().fg(th().success)),
                 Span::styled("  •  ", Style::default().fg(th().border)),
                 Span::styled("○ idle", Style::default().fg(th().text_muted)),
                 Span::styled("  •  ", Style::default().fg(th().border)),

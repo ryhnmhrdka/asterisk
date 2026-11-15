@@ -332,6 +332,7 @@ impl ExecutionEngine {
             for task in &self.tasks {
                 Self::wait_if_paused(&mut self._cmd_rx, &mut paused_set, &self.sender, &task.id, &task.title).await;
                 set_node(&self.sender, &task.id, AgentStatus::Running);
+                send_log(&self.sender, &task.id, "INFO", format!("Dispatched {} ({})", task.title, task.agent));
                 send_chat(
                     &self.sender,
                     ChatMessage::Agent {
@@ -416,6 +417,7 @@ impl ExecutionEngine {
                     let found_count = task_findings.len();
                     all_findings.append(&mut task_findings);
                     set_node(&self.sender, &task.id, AgentStatus::Success);
+                    send_log(&self.sender, &task.id, if found_count > 0 { "WARN" } else { "INFO" }, format!("Completed {}: {} finding(s)", task.title, found_count));
 
                     send_chat(
                         &self.sender,
@@ -426,7 +428,16 @@ impl ExecutionEngine {
                     );
                 } else {
                     set_node(&self.sender, &task.id, AgentStatus::Failed);
+                    send_log(&self.sender, &task.id, "ERROR", format!("Subagent {} failed", task.title));
                 }
+            }
+
+            // Ensure network surface prober also runs if omitted from dynamic AI workflow
+            if !self.tasks.iter().any(|t| t.agent == "net") {
+                let mut net_findings = NetworkProberAgent::scan(&self.target_dir);
+                let net_count = net_findings.len();
+                all_findings.append(&mut net_findings);
+                send_log(&self.sender, "net_prober", if net_count > 0 { "WARN" } else { "INFO" }, format!("Network surface probe completed: {} finding(s)", net_count));
             }
 
             // Execute any dynamically appended followup verification tasks
@@ -564,7 +575,12 @@ impl ExecutionEngine {
             serde_json::json!({ "total_raw_findings": all_findings.len() }),
         );
 
+        // Deduplicate findings by (cwe, file_path, line_number) across multi-agent passes
+        let mut seen_findings = std::collections::HashSet::new();
+        all_findings.retain(|f| seen_findings.insert((f.cwe.clone(), f.file_path.clone(), f.line_number)));
+
         // 4. Stage 2 (Auditable Triage): GraphCore AST & SECURITY.md Evaluation
+        send_log(&self.sender, "graph_core", "INFO", format!("Evaluating AST reachability across {} unique finding(s)", all_findings.len()));
         let mut skill_reg = SkillRegistry::load_from_workspace(&self.target_dir);
 
         for finding in &mut all_findings {
@@ -675,6 +691,7 @@ impl ExecutionEngine {
         Self::wait_if_paused(&mut self._cmd_rx, &mut paused_set, &self.sender, "fix_rewrite", "AST Code Rewriter").await;
         set_node(&self.sender, "fix_rewrite", AgentStatus::Running);
         let mut patches = AutoHardeningAgent::generate_patches(&self.target_dir, &actionable_findings);
+        send_log(&self.sender, "auto_hardening", "INFO", format!("Synthesized {} deterministic hardening patch(es)", patches.len()));
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         set_node(&self.sender, "fix_rewrite", AgentStatus::Success);
 
@@ -829,4 +846,14 @@ impl ExecutionEngine {
 
         let _ = self.sender.send(EngineMessage::ScanFinished);
     }
+}
+
+fn send_log(tx: &UnboundedSender<EngineMessage>, agent: &str, level: &str, message: String) {
+    let _ = tx.send(EngineMessage::Log(DynamicLogEntry {
+        timestamp: chrono::Utc::now(),
+        agent_name: agent.to_string(),
+        level: level.to_string(),
+        message,
+        is_improvisation: false,
+    }));
 }

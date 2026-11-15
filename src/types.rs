@@ -302,7 +302,7 @@ impl AiProvider {
 
 /// Rich Chat Message model
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ChatMessage {
     User(String),
     Thinking {
@@ -338,6 +338,42 @@ pub struct SproutedNodeInfo {
     pub details: String,
     pub findings_count: usize,
     pub is_paused: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkflowTaskNode {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub subtitle: String,
+    #[serde(default = "default_agent_type")]
+    pub agent: String, // "sast", "secrets", "sca", "net", "malware", "verifier"
+    #[serde(default = "default_tier")]
+    pub tier: String,
+    #[serde(default)]
+    pub targets: Vec<String>,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub order: usize,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+}
+
+fn default_agent_type() -> String {
+    "sast".to_string()
+}
+
+fn default_tier() -> String {
+    "subagent".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkflowPlan {
+    pub workflow_name: String,
+    #[serde(default)]
+    pub target_summary: String,
+    pub nodes: Vec<WorkflowTaskNode>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -447,6 +483,26 @@ pub const AVAILABLE_COMMANDS: &[CommandSuggestion] = &[
         name: "/pause",
         args: "",
         description: "Pause / resume selected agent in workflow",
+    },
+    CommandSuggestion {
+        name: "/sessions",
+        args: "[id/list]",
+        description: "View session history or switch to past chat session",
+    },
+    CommandSuggestion {
+        name: "/new",
+        args: "",
+        description: "Start a fresh security audit & chat session",
+    },
+    CommandSuggestion {
+        name: "/grill-me",
+        args: "",
+        description: "Interactive adversarial security architecture interview",
+    },
+    CommandSuggestion {
+        name: "/done",
+        args: "",
+        description: "Finish interview & synthesize hardened security plan",
     },
     CommandSuggestion {
         name: "/clear",

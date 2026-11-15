@@ -1,12 +1,22 @@
 #![allow(dead_code)]
 
-use crate::types::{HardeningPatch, Severity, VulnerabilityFinding};
+use crate::types::{ChatMessage, HardeningPatch, Severity, VulnerabilityFinding};
 use chrono::Utc;
 use rusqlite::{params, Connection, Result as SqlResult};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub session_id: String,
+    pub created_at: i64,
+    pub active_provider: String,
+    pub message_count: usize,
+    pub findings_count: usize,
+    pub title: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectRecord {
@@ -256,6 +266,14 @@ impl StateStore {
             safe_outputs_passed INTEGER NOT NULL DEFAULT 0,
             applied_to_main INTEGER NOT NULL DEFAULT 0
         );
+
+        CREATE TABLE IF NOT EXISTS session_chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            message_json TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_session_chat_msgs ON session_chat_messages(session_id);
         ";
 
         self.conn
@@ -379,6 +397,215 @@ impl StateStore {
             )
             .map_err(|e| format!("Failed to create audit session: {e}"))?;
         Ok(())
+    }
+
+    pub fn save_session_full(
+        &mut self,
+        session_id: &str,
+        project_id: &str,
+        provider: &str,
+        messages: &[ChatMessage],
+        findings: &[VulnerabilityFinding],
+        patches: &[HardeningPatch],
+    ) -> Result<(), String> {
+        let now = chrono::Utc::now().timestamp_millis();
+        let _ = self.conn.execute(
+            "INSERT OR IGNORE INTO projects (id, root_path, security_md_hash, tech_stack_json, updated_at) VALUES (?1, ?2, '', '{}', ?3);",
+            params![project_id, project_id, now],
+        );
+
+        let patches_json = serde_json::to_string(patches).unwrap_or_else(|_| "[]".to_string());
+        self.conn.execute(
+            "INSERT INTO audit_sessions (session_id, project_id, operation_mode, diff_scope, active_provider, canvas_layout_json, git_checkpoint_oid, created_at)
+             VALUES (?1, ?2, 'AUDIT_ONLY', 'FULL', ?3, ?4, '', ?5)
+             ON CONFLICT(session_id) DO UPDATE SET
+                active_provider = excluded.active_provider,
+                canvas_layout_json = excluded.canvas_layout_json,
+                created_at = excluded.created_at;",
+            params![session_id, project_id, provider, patches_json, now],
+        ).map_err(|e| format!("Failed to upsert audit session: {e}"))?;
+
+        let _ = self.conn.execute("DELETE FROM session_chat_messages WHERE session_id = ?1;", params![session_id]);
+
+        let tx = self.conn.transaction().map_err(|e| format!("Transaction error: {e}"))?;
+        for msg in messages {
+            let msg_json = serde_json::to_string(msg).unwrap_or_default();
+            tx.execute(
+                "INSERT INTO session_chat_messages (session_id, message_json, created_at) VALUES (?1, ?2, ?3);",
+                params![session_id, msg_json, now],
+            ).map_err(|e| format!("Failed to insert message: {e}"))?;
+        }
+        tx.commit().map_err(|e| format!("Failed to commit messages: {e}"))?;
+
+        if !findings.is_empty() {
+            let _ = self.conn.execute(
+                "INSERT OR IGNORE INTO sub_agent_runs (agent_id, session_id, role_specialty, loaded_skills_json, status) VALUES (?1, ?2, 'orchestrator', '[]', 'COMPLETED');",
+                params!["orch", session_id],
+            );
+            let _ = self.save_findings(session_id, "orch", findings);
+        }
+
+        Ok(())
+    }
+
+    pub fn list_sessions(&self, project_id: &str) -> Result<Vec<SessionSummary>, String> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.session_id, s.created_at, s.active_provider,
+                    (SELECT COUNT(*) FROM session_chat_messages WHERE session_id = s.session_id) as msg_count,
+                    (SELECT COUNT(*) FROM security_findings WHERE session_id = s.session_id) as finding_count
+             FROM audit_sessions s
+             WHERE s.project_id = ?1
+             ORDER BY s.created_at DESC;",
+        ).map_err(|e| format!("Query prepare error: {e}"))?;
+
+        let rows = stmt.query_map(params![project_id], |row| {
+            let session_id: String = row.get(0)?;
+            let created_at: i64 = row.get(1)?;
+            let active_provider: String = row.get(2)?;
+            let message_count: i64 = row.get(3)?;
+            let findings_count: i64 = row.get(4)?;
+            Ok((session_id, created_at, active_provider, message_count as usize, findings_count as usize))
+        }).map_err(|e| format!("Query map error: {e}"))?;
+
+        let mut list = Vec::new();
+        for r in rows {
+            let (session_id, created_at, active_provider, message_count, findings_count) = r.map_err(|e| e.to_string())?;
+
+            let mut title = format!("Security Session {}", &session_id);
+            if let Ok(mut msg_stmt) = self.conn.prepare(
+                "SELECT message_json FROM session_chat_messages WHERE session_id = ?1 ORDER BY id ASC LIMIT 10;"
+            ) {
+                let msg_rows = msg_stmt.query_map(params![&session_id], |row| row.get::<_, String>(0));
+                if let Ok(m_rows) = msg_rows {
+                    for m_res in m_rows.flatten() {
+                        if let Ok(ChatMessage::User(u_txt)) = serde_json::from_str::<ChatMessage>(&m_res) {
+                            let trimmed = u_txt.trim();
+                            if !trimmed.is_empty() {
+                                title = if trimmed.len() > 40 {
+                                    format!("{}...", &trimmed[..37])
+                                } else {
+                                    trimmed.to_string()
+                                };
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            list.push(SessionSummary {
+                session_id,
+                created_at,
+                active_provider,
+                message_count,
+                findings_count,
+                title,
+            });
+        }
+        Ok(list)
+    }
+
+    pub fn load_session_full(
+        &self,
+        session_id: &str,
+    ) -> Result<(Vec<ChatMessage>, Vec<VulnerabilityFinding>, Vec<HardeningPatch>), String> {
+        let mut messages = Vec::new();
+        let mut stmt = self.conn.prepare(
+            "SELECT message_json FROM session_chat_messages WHERE session_id = ?1 ORDER BY id ASC;"
+        ).map_err(|e| format!("Prepare error: {e}"))?;
+
+        let rows = stmt.query_map(params![session_id], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("Query error: {e}"))?;
+
+        for r in rows {
+            if let Ok(json_str) = r {
+                if let Ok(msg) = serde_json::from_str::<ChatMessage>(&json_str) {
+                    messages.push(msg);
+                }
+            }
+        }
+
+        let mut findings = Vec::new();
+        if let Ok(mut f_stmt) = self.conn.prepare(
+            "SELECT sf.finding_id, sf.category, sf.severity, sf.file_path, sf.line_number, sf.triage_reasoning, sf.call_path_json,
+                    COALESCE(rp.applied_to_main, 0) as patched, sf.reachability_status, sf.triage_verdict
+             FROM security_findings sf
+             LEFT JOIN remediation_patches rp ON sf.finding_id = rp.finding_id
+             WHERE sf.session_id = ?1
+             ORDER BY sf.line_number ASC;"
+        ) {
+            if let Ok(f_rows) = f_stmt.query_map(params![session_id], |row| {
+                let id: String = row.get(0)?;
+                let category: String = row.get(1)?;
+                let sev_str: String = row.get(2)?;
+                let file_path: String = row.get(3)?;
+                let line_number: i64 = row.get(4)?;
+                let recommendation: String = row.get(5)?;
+                let call_path_json: String = row.get(6)?;
+                let patched_int: i64 = row.get(7)?;
+                let reachability: String = row.get(8)?;
+                let triage_verdict: String = row.get(9)?;
+
+                let severity = match sev_str.as_str() {
+                    "CRITICAL" => Severity::Critical,
+                    "HIGH" => Severity::High,
+                    "MEDIUM" => Severity::Medium,
+                    "LOW" => Severity::Low,
+                    _ => Severity::Info,
+                };
+
+                let meta: serde_json::Value =
+                    serde_json::from_str(&call_path_json).unwrap_or(serde_json::Value::Null);
+                let title = meta["title"]
+                    .as_str()
+                    .unwrap_or("Security Finding")
+                    .to_string();
+                let description = meta["description"].as_str().unwrap_or("").to_string();
+                let snippet = meta["snippet"].as_str().unwrap_or("").to_string();
+                let call_path = meta["call_path"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                Ok(VulnerabilityFinding {
+                    id,
+                    title,
+                    cwe: category,
+                    severity,
+                    file_path: PathBuf::from(file_path),
+                    line_number: line_number as usize,
+                    snippet,
+                    description,
+                    recommendation: recommendation.clone(),
+                    patched: patched_int > 0,
+                    reachability,
+                    triage_verdict,
+                    triage_reasoning: recommendation,
+                    call_path,
+                })
+            }) {
+                for f in f_rows.flatten() {
+                    findings.push(f);
+                }
+            }
+        }
+
+        let mut patches = Vec::new();
+        if let Ok(mut p_stmt) = self.conn.prepare("SELECT canvas_layout_json FROM audit_sessions WHERE session_id = ?1;") {
+            if let Ok(p_str) = p_stmt.query_row(params![session_id], |row| row.get::<_, Option<String>>(0)) {
+                if let Some(s) = p_str {
+                    if let Ok(pts) = serde_json::from_str::<Vec<HardeningPatch>>(&s) {
+                        patches = pts;
+                    }
+                }
+            }
+        }
+
+        Ok((messages, findings, patches))
     }
 
     pub fn record_sub_agent_run(&self, run: &SubAgentRunRecord) -> Result<(), String> {

@@ -1220,3 +1220,1009 @@ fn test_interactive_help_modal_and_findings_reachability_filter() {
     app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::empty()));
     assert_eq!(app.selected_matrix_row, 0, "'k' must move cursor up to previous finding");
 }
+
+#[tokio::test]
+async fn test_ai_workflow_plan_synthesis_and_parsing() {
+    use asterisk::orchestrator::{AgentGraphBuilder, StrategyPlanner};
+    use std::collections::HashMap;
+
+    let target = PathBuf::from("./tests/fixtures/vulnerable_repo");
+    assert!(target.exists());
+
+    // 1. Scan workspace file list - verify low-level files/cargo/git are ignored
+    let files = StrategyPlanner::scan_workspace_file_list(&target);
+    assert!(!files.is_empty(), "workspace should contain source files");
+    for f in &files {
+        assert!(!f.ends_with("Cargo.toml"), "Cargo.toml should be filtered out: {f}");
+        assert!(!f.contains(".git"), ".git should be filtered out: {f}");
+        assert!(!f.contains("target"), "target build dir should be filtered out: {f}");
+    }
+
+    // 2. Heuristic workflow plan generation
+    let plan = StrategyPlanner::create_heuristic_workflow_plan(&files, None);
+    assert!(!plan.nodes.is_empty(), "heuristic plan should generate modular tasks");
+    assert!(plan.nodes.iter().any(|n| n.agent == "secrets"), "must include secrets hunter task");
+    assert!(plan.nodes.iter().any(|n| n.agent == "sast"), "must include sast analyzer task");
+
+    // 2b. Test directive influence in heuristic generation
+    let directive_plan = StrategyPlanner::create_heuristic_workflow_plan(&files, Some("tolong scan folder auth dulu gitu"));
+    assert!(
+        directive_plan.nodes.iter().any(|n| n.id == "task_user_priority" || n.title.contains("User Directed")),
+        "Directive should create prioritized user scope node"
+    );
+
+    // 3. Workflow JSON serialization & parsing
+    let json_str = serde_json::to_string_pretty(&plan).expect("plan must serialize to json");
+    let parsed_plan = StrategyPlanner::parse_workflow_json(&json_str).expect("plan must parse from json");
+    assert_eq!(plan.workflow_name, parsed_plan.workflow_name);
+    assert_eq!(plan.nodes.len(), parsed_plan.nodes.len());
+
+    // 4. Construct Flow graph from plan
+    let mut nodes_info = HashMap::new();
+    let _flow = AgentGraphBuilder::build_from_workflow_plan(&plan, &mut nodes_info)
+        .expect("building flow from workflow plan should succeed");
+
+    assert!(nodes_info.contains_key("orch"), "must contain orch root");
+    assert!(nodes_info.contains_key("defense_gate"), "must contain defense gate");
+    for task in &plan.nodes {
+        assert!(nodes_info.contains_key(&task.id), "nodes_info must contain task {}", task.id);
+    }
+}
+
+#[tokio::test]
+async fn test_interactive_workflow_node_delete_and_move() {
+    use asterisk::orchestrator::AgentGraphBuilder;
+    use asterisk::types::{WorkflowPlan, WorkflowTaskNode};
+    use asterisk::ui::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let target = PathBuf::from("./tests/fixtures/vulnerable_repo");
+    let mut app = App::new(target, false);
+    app.config.api_key = Some("test-key".to_string());
+
+    let test_plan = WorkflowPlan {
+        workflow_name: "Test Dynamic Workflow".to_string(),
+        target_summary: "Test targets".to_string(),
+        nodes: vec![
+            WorkflowTaskNode {
+                id: "task_1_secrets".to_string(),
+                title: "Secrets Scan".to_string(),
+                subtitle: "Entropy analysis".to_string(),
+                agent: "secrets".to_string(),
+                tier: "secrets".to_string(),
+                targets: vec!["src/main.rs".to_string()],
+                description: "Scan secrets".to_string(),
+                order: 0,
+                depends_on: vec![],
+            },
+            WorkflowTaskNode {
+                id: "task_2_sast".to_string(),
+                title: "SAST Scan".to_string(),
+                subtitle: "Code guard".to_string(),
+                agent: "sast".to_string(),
+                tier: "sast".to_string(),
+                targets: vec!["src/app.rs".to_string()],
+                description: "Scan sast".to_string(),
+                order: 1,
+                depends_on: vec![],
+            },
+            WorkflowTaskNode {
+                id: "task_3_net".to_string(),
+                title: "Net Surface".to_string(),
+                subtitle: "Network check".to_string(),
+                agent: "net".to_string(),
+                tier: "net".to_string(),
+                targets: vec![],
+                description: "Scan net".to_string(),
+                order: 2,
+                depends_on: vec![],
+            },
+        ],
+    };
+
+    app.flow = AgentGraphBuilder::build_from_workflow_plan(&test_plan, &mut app.nodes_info)
+        .expect("Flow construction must succeed");
+    app.current_workflow_plan = Some(test_plan.clone());
+    app.awaiting_confirmation = true;
+    app.current_tab = 0;
+
+    // Orchestrator and defense gate cannot be deleted
+    app.selected_node_id = Some("orch".to_string());
+    app.delete_selected_workflow_node();
+    assert!(app.nodes_info.contains_key("orch"), "orch must never be deleted");
+
+    app.selected_node_id = Some("defense_gate".to_string());
+    app.delete_selected_workflow_node();
+    assert!(app.nodes_info.contains_key("defense_gate"), "defense_gate must never be deleted");
+
+    // Deleting task_2_sast via 'd' key
+    app.selected_node_id = Some("task_2_sast".to_string());
+    assert!(app.nodes_info.contains_key("task_2_sast"));
+    app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::empty()));
+    assert!(!app.nodes_info.contains_key("task_2_sast"), "task_2_sast must be deleted");
+    assert_eq!(app.current_workflow_plan.as_ref().unwrap().nodes.len(), 2);
+
+    // Shifting task_3_net horizontally left
+    app.selected_node_id = Some("task_3_net".to_string());
+    let initial_x = app.flow.node("task_3_net").unwrap().position.x;
+    app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::empty()));
+    let shifted_x = app.flow.node("task_3_net").unwrap().position.x;
+    assert!(shifted_x < initial_x, "task_3_net position.x must shift left");
+
+    // Shifting task_3_net horizontally right via 'l'
+    app.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::empty()));
+    let reverted_x = app.flow.node("task_3_net").unwrap().position.x;
+    assert!((reverted_x - initial_x).abs() < 0.1, "task_3_net position.x must shift right back");
+
+    // Shifting task_3_net vertically up via 'k'
+    let initial_y = app.flow.node("task_3_net").unwrap().position.y;
+    app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::empty()));
+    let shifted_y = app.flow.node("task_3_net").unwrap().position.y;
+    assert!(shifted_y < initial_y, "task_3_net position.y must shift up");
+
+    // Shifting task_3_net vertically down via 'j'
+    app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::empty()));
+    let reverted_y = app.flow.node("task_3_net").unwrap().position.y;
+    assert!((reverted_y - initial_y).abs() < 0.1, "task_3_net position.y must shift down back");
+}
+
+#[tokio::test]
+async fn test_flow_pause_and_resume_execution() {
+    use asterisk::execution::{EngineCommand, EngineMessage, ExecutionEngine};
+    use asterisk::types::{WorkflowTaskNode, AgentStatus};
+    use std::collections::HashSet;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    let target = PathBuf::from("./tests/fixtures/vulnerable_repo");
+    let (tx, mut rx) = unbounded_channel();
+    let (cmd_tx, cmd_rx) = unbounded_channel();
+
+    let custom_tasks = vec![
+        WorkflowTaskNode {
+            id: "paused_task".to_string(),
+            title: "Paused Task Test".to_string(),
+            subtitle: "Testing pause".to_string(),
+            agent: "secrets".to_string(),
+            tier: "secrets".to_string(),
+            targets: vec![],
+            description: "Task that starts paused".to_string(),
+            order: 0,
+            depends_on: vec![],
+        },
+    ];
+
+    let mut initially_paused = HashSet::new();
+    initially_paused.insert("paused_task".to_string());
+
+    let engine = ExecutionEngine::new(target, tx, cmd_rx)
+        .with_tasks(custom_tasks)
+        .with_paused_nodes(initially_paused);
+
+    let handle = tokio::spawn(async move {
+        engine.run_autonomous_audit().await;
+    });
+
+    // Wait briefly and verify node announced as Paused
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let mut saw_paused = false;
+    while let Ok(msg) = rx.try_recv() {
+        if let EngineMessage::NodeStatusChanged { id, status } = msg {
+            if id == "paused_task" && status == AgentStatus::Paused {
+                saw_paused = true;
+            }
+        }
+    }
+    assert!(saw_paused, "paused_task must enter AgentStatus::Paused");
+
+    // Send resume command
+    let _ = cmd_tx.send(EngineCommand::ResumeNode("paused_task".to_string()));
+
+    // Await engine completion
+    let _ = handle.await;
+
+    let mut saw_success = false;
+    while let Ok(msg) = rx.try_recv() {
+        if let EngineMessage::NodeStatusChanged { id, status } = msg {
+            if id == "paused_task" && status == AgentStatus::Success {
+                saw_success = true;
+            }
+        }
+    }
+    assert!(saw_success, "paused_task must finish with AgentStatus::Success after resume");
+}
+
+#[tokio::test]
+async fn test_dynamic_workflow_execution_follows_reordered_nodes() {
+    use asterisk::execution::{EngineMessage, ExecutionEngine};
+    use asterisk::types::{WorkflowTaskNode, AgentStatus};
+    use tokio::sync::mpsc::unbounded_channel;
+
+    let target = PathBuf::from("./tests/fixtures/vulnerable_repo");
+    let (tx, mut rx) = unbounded_channel();
+    let (_cmd_tx, cmd_rx) = unbounded_channel();
+
+    let custom_tasks = vec![
+        WorkflowTaskNode {
+            id: "custom_secrets".to_string(),
+            title: "Secret Detection".to_string(),
+            subtitle: "Credential miner".to_string(),
+            agent: "secrets".to_string(),
+            tier: "secrets".to_string(),
+            targets: vec!["secrets".to_string()],
+            description: "Scan test secrets".to_string(),
+            order: 0,
+            depends_on: vec![],
+        },
+        WorkflowTaskNode {
+            id: "custom_sast".to_string(),
+            title: "SAST Deep Inspection".to_string(),
+            subtitle: "AST analyzer".to_string(),
+            agent: "sast".to_string(),
+            tier: "sast".to_string(),
+            targets: vec!["src".to_string()],
+            description: "Scan test sast".to_string(),
+            order: 1,
+            depends_on: vec![],
+        },
+    ];
+
+    let engine = ExecutionEngine::new(target, tx, cmd_rx)
+        .with_diff_scope("FULL")
+        .with_active_provider("AnthropicClaude")
+        .with_tasks(custom_tasks);
+
+    engine.run_autonomous_audit().await;
+
+    let mut executed_nodes = Vec::new();
+    let mut scan_finished = false;
+
+    while let Ok(msg) = rx.try_recv() {
+        match msg {
+            EngineMessage::NodeStatusChanged { id, status } => {
+                if status == AgentStatus::Running {
+                    executed_nodes.push(id);
+                }
+            }
+            EngineMessage::ScanFinished => {
+                scan_finished = true;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(scan_finished, "Scan must complete");
+    assert!(executed_nodes.contains(&"custom_secrets".to_string()), "custom_secrets must execute");
+    assert!(executed_nodes.contains(&"custom_sast".to_string()), "custom_sast must execute");
+}
+
+#[tokio::test]
+async fn test_scan_with_custom_directive_prompt() {
+    use asterisk::types::ChatMessage;
+    use asterisk::ui::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let target = PathBuf::from("./tests/fixtures/vulnerable_repo");
+    let mut app = App::new(target, false);
+    app.config.api_key = Some("test-key".to_string());
+
+    // Type /scan with custom user directive
+    app.prompt_input = "/scan tolong scan folder backend dulu gitu".to_string();
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+    // Verify thinking message reflects user's directive
+    let has_directive_thinking = app.chat_messages.iter().any(|msg| match msg {
+        ChatMessage::Thinking { thought, .. } => thought.contains("tolong scan folder backend dulu gitu"),
+        _ => false,
+    });
+    assert!(has_directive_thinking, "Orchestrator thinking must incorporate user directive");
+}
+
+#[tokio::test]
+async fn test_branching_tree_dag_layout() {
+    use asterisk::orchestrator::AgentGraphBuilder;
+    use asterisk::types::{WorkflowPlan, WorkflowTaskNode};
+    use std::collections::HashMap;
+
+    let branched_plan = WorkflowPlan {
+        workflow_name: "Branched Test Pipeline".to_string(),
+        target_summary: "Multi-branch tree test".to_string(),
+        nodes: vec![
+            WorkflowTaskNode {
+                id: "b1_secrets".to_string(),
+                title: "Branch 1: Secrets".to_string(),
+                subtitle: "cred miner".to_string(),
+                agent: "secrets".to_string(),
+                tier: "secrets".to_string(),
+                targets: vec![],
+                description: "branch 1".to_string(),
+                order: 1,
+                depends_on: vec![], // Root-level parallel branch 1
+            },
+            WorkflowTaskNode {
+                id: "b2_sast".to_string(),
+                title: "Branch 2: SAST".to_string(),
+                subtitle: "code guard".to_string(),
+                agent: "sast".to_string(),
+                tier: "sast".to_string(),
+                targets: vec![],
+                description: "branch 2".to_string(),
+                order: 2,
+                depends_on: vec![], // Root-level parallel branch 2
+            },
+            WorkflowTaskNode {
+                id: "b3_net".to_string(),
+                title: "Branch 3: Network".to_string(),
+                subtitle: "port prober".to_string(),
+                agent: "net".to_string(),
+                tier: "net".to_string(),
+                targets: vec![],
+                description: "branch 3".to_string(),
+                order: 3,
+                depends_on: vec![], // Root-level parallel branch 3
+            },
+            WorkflowTaskNode {
+                id: "converge_verifier".to_string(),
+                title: "Convergence Verifier".to_string(),
+                subtitle: "sandbox verifier".to_string(),
+                agent: "verifier".to_string(),
+                tier: "verifier".to_string(),
+                targets: vec![],
+                description: "converges all branches".to_string(),
+                order: 4,
+                depends_on: vec!["b1_secrets".to_string(), "b2_sast".to_string(), "b3_net".to_string()],
+            },
+        ],
+    };
+
+    let mut nodes_info = HashMap::new();
+    let flow = AgentGraphBuilder::build_from_workflow_plan(&branched_plan, &mut nodes_info)
+        .expect("Building branched flow must succeed");
+
+    let b1 = flow.node("b1_secrets").unwrap();
+    let b2 = flow.node("b2_sast").unwrap();
+    let b3 = flow.node("b3_net").unwrap();
+    let converge = flow.node("converge_verifier").unwrap();
+
+    // Parallel branches share the same column X coordinate
+    assert!((b1.position.x - b2.position.x).abs() < 0.1, "Parallel branches should align horizontally in Column 1");
+    assert!((b2.position.x - b3.position.x).abs() < 0.1, "Parallel branches should align horizontally in Column 1");
+
+    // Parallel branches branch out across different vertical Y coordinates (not a single horizontal line!)
+    assert!(b1.position.y != b2.position.y, "Branches b1 and b2 must have distinct Y positions: {} vs {}", b1.position.y, b2.position.y);
+    assert!(b2.position.y != b3.position.y, "Branches b2 and b3 must have distinct Y positions: {} vs {}", b2.position.y, b3.position.y);
+
+    // Convergence node is in the downstream layer (X > parallel branches)
+    assert!(converge.position.x > b1.position.x, "Convergence node must be downstream (higher X)");
+}
+
+#[tokio::test]
+async fn test_workflow_persists_on_completion_with_animated_edges() {
+    use asterisk::orchestrator::AgentGraphBuilder;
+    use asterisk::execution::EngineMessage;
+    use asterisk::types::{WorkflowPlan, WorkflowTaskNode, AgentStatus};
+    use asterisk::ui::App;
+
+    let target = PathBuf::from("./tests/fixtures/vulnerable_repo");
+    let mut app = App::new(target, false);
+    app.config.api_key = Some("test-key".to_string());
+
+    let plan = WorkflowPlan {
+        workflow_name: "Persistence Test Plan".to_string(),
+        target_summary: "Test targets".to_string(),
+        nodes: vec![
+            WorkflowTaskNode {
+                id: "task_verify_1".to_string(),
+                title: "Deep Verify 1".to_string(),
+                subtitle: "SAST verification".to_string(),
+                agent: "sast".to_string(),
+                tier: "workflow_task".to_string(),
+                targets: vec!["src/main.rs".to_string()],
+                description: "Deep check".to_string(),
+                order: 0,
+                depends_on: vec![],
+            },
+        ],
+    };
+
+    app.flow = AgentGraphBuilder::build_from_workflow_plan(&plan, &mut app.nodes_info)
+        .expect("Building flow should succeed");
+    app.current_workflow_plan = Some(plan.clone());
+
+    assert!(app.flow.node("task_verify_1").is_some(), "task_verify_1 must exist in flow");
+
+    // 1. Simulate running state: line should animate
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    app.engine_rx = rx;
+    let _ = tx.send(EngineMessage::NodeStatusChanged {
+        id: "task_verify_1".to_string(),
+        status: AgentStatus::Running,
+    });
+    app.update();
+
+    assert_eq!(app.nodes_info.get("task_verify_1").unwrap().status, AgentStatus::Running);
+    // Edge leading to task_verify_1 should be animated
+    let running_edge = app.flow.edges().iter().find(|e| e.target == "task_verify_1" || e.source == "task_verify_1");
+    assert!(running_edge.is_some(), "Edge connecting to task_verify_1 must exist");
+    assert!(running_edge.unwrap().animated, "Edge connecting to Running node must be animated!");
+
+    // 2. Simulate scan finished: workflow must NOT be removed or cleared!
+    let _ = tx.send(EngineMessage::NodeStatusChanged {
+        id: "task_verify_1".to_string(),
+        status: AgentStatus::Success,
+    });
+    let _ = tx.send(EngineMessage::ScanFinished);
+    app.update();
+
+    assert!(!app.is_running, "App is no longer running");
+    assert!(app.flow.node("task_verify_1").is_some(), "Workflow node MUST persist after completion!");
+    assert!(app.nodes_info.contains_key("task_verify_1"), "nodes_info MUST retain task_verify_1 after completion!");
+    assert!(app.flow.node("defense_gate").is_some(), "defense_gate MUST persist!");
+}
+
+#[tokio::test]
+async fn test_subagent_error_handling_marks_failed_without_message_and_preserves_flow() {
+    use asterisk::orchestrator::AgentGraphBuilder;
+    use asterisk::execution::EngineMessage;
+    use asterisk::types::{WorkflowPlan, WorkflowTaskNode, AgentStatus};
+    use asterisk::ui::App;
+
+    let target = PathBuf::from("./tests/fixtures/vulnerable_repo");
+    let mut app = App::new(target, false);
+    app.config.api_key = Some("test-key".to_string());
+
+    let plan = WorkflowPlan {
+        workflow_name: "Failure Test Plan".to_string(),
+        target_summary: "Failure test".to_string(),
+        nodes: vec![
+            WorkflowTaskNode {
+                id: "task_failed_node".to_string(),
+                title: "Faulty Subagent".to_string(),
+                subtitle: "Simulated failure".to_string(),
+                agent: "sast".to_string(),
+                tier: "workflow_task".to_string(),
+                targets: vec![],
+                description: "fails".to_string(),
+                order: 0,
+                depends_on: vec![],
+            },
+        ],
+    };
+
+    app.flow = AgentGraphBuilder::build_from_workflow_plan(&plan, &mut app.nodes_info)
+        .expect("Building flow should succeed");
+    app.current_workflow_plan = Some(plan.clone());
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    app.engine_rx = rx;
+
+    let initial_msg_count = app.chat_messages.len();
+
+    // Node fails: status changes to Failed
+    let _ = tx.send(EngineMessage::NodeStatusChanged {
+        id: "task_failed_node".to_string(),
+        status: AgentStatus::Failed,
+    });
+    app.update();
+
+    // Node is marked Failed ("kalau error ya error, no message, workflow tidak hilang")
+    assert_eq!(app.nodes_info.get("task_failed_node").unwrap().status, AgentStatus::Failed);
+    assert!(app.flow.node("task_failed_node").is_some(), "Workflow node MUST NOT be deleted on error!");
+    assert_eq!(app.chat_messages.len(), initial_msg_count, "No noisy message or paragraph should be spammed to chat on error!");
+}
+
+#[tokio::test]
+async fn test_ai_followup_verification_creates_workflow_below_current() {
+    use asterisk::orchestrator::AgentGraphBuilder;
+    use asterisk::execution::EngineMessage;
+    use asterisk::types::{WorkflowPlan, WorkflowTaskNode};
+    use asterisk::ui::App;
+
+    let target = PathBuf::from("./tests/fixtures/vulnerable_repo");
+    let mut app = App::new(target, false);
+    app.config.api_key = Some("test-key".to_string());
+
+    let plan = WorkflowPlan {
+        workflow_name: "Follow-up Test Plan".to_string(),
+        target_summary: "Followup test".to_string(),
+        nodes: vec![
+            WorkflowTaskNode {
+                id: "initial_task".to_string(),
+                title: "Initial Subagent".to_string(),
+                subtitle: "Initial check".to_string(),
+                agent: "sast".to_string(),
+                tier: "workflow_task".to_string(),
+                targets: vec![],
+                description: "Initial".to_string(),
+                order: 0,
+                depends_on: vec![],
+            },
+        ],
+    };
+
+    app.flow = AgentGraphBuilder::build_from_workflow_plan(&plan, &mut app.nodes_info)
+        .expect("Building flow should succeed");
+    app.current_workflow_plan = Some(plan.clone());
+
+    let initial_task_y = app.flow.node("initial_task").unwrap().position.y;
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    app.engine_rx = rx;
+
+    // AI discovers follow-up verification: emits WorkflowNodeAppended
+    let followup = WorkflowTaskNode {
+        id: "verify_followup_token".to_string(),
+        title: "Verify token.rs".to_string(),
+        subtitle: "Check token signing".to_string(),
+        agent: "verifier".to_string(),
+        tier: "workflow_task".to_string(),
+        targets: vec!["src/token.rs".to_string()],
+        description: "Check token signing algorithm".to_string(),
+        order: 1,
+        depends_on: vec!["initial_task".to_string()],
+    };
+
+    let _ = tx.send(EngineMessage::WorkflowNodeAppended {
+        node: followup,
+        parent_id: "initial_task".to_string(),
+    });
+    app.update();
+
+    // Verify that the new node exists in flow and nodes_info
+    assert!(app.flow.node("verify_followup_token").is_some(), "Follow-up node must be added to flow");
+    assert!(app.nodes_info.contains_key("verify_followup_token"), "Follow-up node must be in nodes_info");
+
+    // Verify it is placed DIBAWAH workflow saat ini (Y coordinate is strictly greater than initial task)
+    let followup_y = app.flow.node("verify_followup_token").unwrap().position.y;
+    assert!(
+        followup_y > initial_task_y + 4.0,
+        "Follow-up verification node MUST be placed below current workflow: followup_y ({}) vs initial_y ({})",
+        followup_y,
+        initial_task_y
+    );
+}
+
+#[test]
+fn test_each_node_has_at_most_one_outgoing_arrow() {
+    use asterisk::orchestrator::AgentGraphBuilder;
+    use asterisk::types::{WorkflowPlan, WorkflowTaskNode};
+    use std::collections::HashMap;
+
+    let branched_plan = WorkflowPlan {
+        workflow_name: "Multi-branch Workflow".to_string(),
+        target_summary: "Multi-branch test".to_string(),
+        nodes: vec![
+            WorkflowTaskNode {
+                id: "b1_secrets".to_string(),
+                title: "Branch 1: Secrets".to_string(),
+                subtitle: "key miner".to_string(),
+                agent: "secrets".to_string(),
+                tier: "secrets".to_string(),
+                targets: vec![],
+                description: "branch 1".to_string(),
+                order: 1,
+                depends_on: vec![],
+            },
+            WorkflowTaskNode {
+                id: "b2_sast".to_string(),
+                title: "Branch 2: SAST".to_string(),
+                subtitle: "taint analyzer".to_string(),
+                agent: "sast".to_string(),
+                tier: "sast".to_string(),
+                targets: vec![],
+                description: "branch 2".to_string(),
+                order: 2,
+                depends_on: vec![],
+            },
+            WorkflowTaskNode {
+                id: "b3_net".to_string(),
+                title: "Branch 3: Network".to_string(),
+                subtitle: "port prober".to_string(),
+                agent: "net".to_string(),
+                tier: "net".to_string(),
+                targets: vec![],
+                description: "branch 3".to_string(),
+                order: 3,
+                depends_on: vec![],
+            },
+            WorkflowTaskNode {
+                id: "converge_verifier".to_string(),
+                title: "Convergence Verifier".to_string(),
+                subtitle: "sandbox verifier".to_string(),
+                agent: "verifier".to_string(),
+                tier: "verifier".to_string(),
+                targets: vec![],
+                description: "converges all branches".to_string(),
+                order: 4,
+                depends_on: vec!["b1_secrets".to_string(), "b2_sast".to_string(), "b3_net".to_string()],
+            },
+        ],
+    };
+
+    let mut nodes_info = HashMap::new();
+    let flow = AgentGraphBuilder::build_from_workflow_plan(&branched_plan, &mut nodes_info)
+        .expect("Building branched flow must succeed");
+
+    // Invariant check: For every active task node in the workflow, exactly 1 outgoing AND 1 incoming arrow must exist
+    for task in &branched_plan.nodes {
+        let outgoing_count = flow.edges().iter().filter(|e| e.source == task.id).count();
+        let incoming_count = flow.edges().iter().filter(|e| e.target == task.id).count();
+        assert_eq!(
+            outgoing_count, 1,
+            "Node {} MUST have exactly 1 outgoing arrow, found {}",
+            task.id, outgoing_count
+        );
+        assert_eq!(
+            incoming_count, 1,
+            "Node {} MUST have exactly 1 incoming arrow (no branching/roots!), found {}",
+            task.id, incoming_count
+        );
+    }
+
+    // Invariant check: Orch MUST have EXACTLY 1 outgoing arrow and 0 incoming arrows
+    let orch_outgoing_count = flow.edges().iter().filter(|e| e.source == "orch").count();
+    let orch_incoming_count = flow.edges().iter().filter(|e| e.target == "orch").count();
+    assert_eq!(orch_outgoing_count, 1, "Orchestrator MUST have exactly 1 outgoing arrow!");
+    assert_eq!(orch_incoming_count, 0, "Orchestrator must have 0 incoming arrows");
+
+    // Invariant check: Defense gate MUST have EXACTLY 1 incoming arrow and 0 outgoing arrows
+    let gate_incoming_count = flow.edges().iter().filter(|e| e.target == "defense_gate").count();
+    let gate_outgoing_count = flow.edges().iter().filter(|e| e.source == "defense_gate").count();
+    assert_eq!(gate_incoming_count, 1, "Defense gate MUST have exactly 1 incoming arrow!");
+    assert_eq!(gate_outgoing_count, 0, "Defense gate must have 0 outgoing arrows");
+
+    // Verify sequential flow order: orch -> b1_secrets -> b2_sast -> b3_net -> converge_verifier -> defense_gate
+    let orch_edge = flow.edges().iter().find(|e| e.source == "orch").unwrap();
+    assert_eq!(orch_edge.target, "b1_secrets");
+
+    let b1_edge = flow.edges().iter().find(|e| e.source == "b1_secrets").unwrap();
+    assert_eq!(b1_edge.target, "b2_sast");
+
+    let b2_edge = flow.edges().iter().find(|e| e.source == "b2_sast").unwrap();
+    assert_eq!(b2_edge.target, "b3_net");
+
+    let b3_edge = flow.edges().iter().find(|e| e.source == "b3_net").unwrap();
+    assert_eq!(b3_edge.target, "converge_verifier");
+
+    let converge_edge = flow.edges().iter().find(|e| e.source == "converge_verifier").unwrap();
+    assert_eq!(converge_edge.target, "defense_gate");
+}
+
+#[tokio::test]
+async fn test_pause_total_via_esc_and_space_stops_animation_and_grays_out() {
+    use asterisk::orchestrator::AgentGraphBuilder;
+    use asterisk::types::{AgentStatus, WorkflowPlan, WorkflowTaskNode};
+    use asterisk::ui::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::collections::HashMap;
+
+    let target = PathBuf::from("./tests/fixtures/vulnerable_repo");
+    let mut app = App::new(target, false);
+    app.config.api_key = Some("test-key".to_string());
+
+    let plan = WorkflowPlan {
+        workflow_name: "Pause Test".to_string(),
+        target_summary: "Testing pause total".to_string(),
+        nodes: vec![
+            WorkflowTaskNode {
+                id: "task_scan".to_string(),
+                title: "Scan Task".to_string(),
+                subtitle: "scanner".to_string(),
+                agent: "sast".to_string(),
+                tier: "sast".to_string(),
+                targets: vec![],
+                description: "scanning".to_string(),
+                order: 1,
+                depends_on: vec![],
+            },
+        ],
+    };
+
+    let mut nodes_info = HashMap::new();
+    let flow = AgentGraphBuilder::build_from_workflow_plan(&plan, &mut nodes_info).unwrap();
+    app.flow = flow;
+    app.nodes_info = nodes_info;
+    app.is_running = true;
+
+    // Set task running and verify edge animates
+    app.nodes_info.get_mut("task_scan").unwrap().status = AgentStatus::Running;
+    AgentGraphBuilder::rechain_workflow_edges(&mut app.flow, &app.nodes_info);
+    let edge_before = app.flow.edges().iter().find(|e| e.source == "orch").unwrap();
+    assert!(edge_before.animated, "Edge must animate while task is running");
+
+    // 1. Press ESC while running -> Triggers PAUSE TOTAL
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+
+    // Verify all nodes are marked paused
+    for node in app.nodes_info.values() {
+        assert!(node.is_paused, "Node {} must be paused", node.id);
+    }
+
+    // Verify animation has STOPPED (animated == false)
+    for edge in app.flow.edges() {
+        assert!(!edge.animated, "Edge {} animation must STOP when paused!", edge.id);
+    }
+
+    // 2. Press Space while paused -> Resumes execution
+    app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::empty()));
+    for node in app.nodes_info.values() {
+        assert!(!node.is_paused, "Node {} must resume after space pressed", node.id);
+    }
+}
+
+#[tokio::test]
+async fn test_fixing_workflow_sprouts_below_scan_workflow() {
+    use asterisk::orchestrator::AgentGraphBuilder;
+    use asterisk::types::{WorkflowPlan, WorkflowTaskNode};
+    use std::collections::HashMap;
+
+    let plan = WorkflowPlan {
+        workflow_name: "Audit Phase 1".to_string(),
+        target_summary: "Initial audit surface".to_string(),
+        nodes: vec![
+            WorkflowTaskNode {
+                id: "scan_1".to_string(),
+                title: "Scan Surface 1".to_string(),
+                subtitle: "auth scan".to_string(),
+                agent: "sast".to_string(),
+                tier: "sast".to_string(),
+                targets: vec![],
+                description: "scan 1".to_string(),
+                order: 1,
+                depends_on: vec![],
+            },
+        ],
+    };
+
+    let mut nodes_info = HashMap::new();
+    let mut flow = AgentGraphBuilder::build_from_workflow_plan(&plan, &mut nodes_info)
+        .expect("Building scan flow succeeds");
+
+    // Verify Row 1: Scan workflow is at y = 14.0
+    let scan_y = flow.node("scan_1").unwrap().position.y;
+    assert_eq!(scan_y, 14.0, "Scan workflow must be on Row 1 (y = 14.0)");
+
+    // SPROUT FIXING WORKFLOW directly below scan workflow
+    AgentGraphBuilder::append_fixing_workflow(&mut flow, &mut nodes_info, 3);
+
+    // Verify Row 2 nodes exist: fix_orch, fix_rewrite, fix_add_code, fix_exec, fix_verify, fix_gate
+    let fix_orch = flow.node("fix_orch").expect("fix_orch must exist as new start point");
+    let fix_rewrite = flow.node("fix_rewrite").expect("fix_rewrite must exist for code rewrite");
+    let fix_add_code = flow.node("fix_add_code").expect("fix_add_code must exist for adding code/guards");
+    let fix_exec = flow.node("fix_exec").expect("fix_exec must exist for executing commands");
+    let fix_verify = flow.node("fix_verify").expect("fix_verify must exist for regression verification");
+    let fix_gate = flow.node("fix_gate").expect("fix_gate must exist as new endpoint");
+
+    // Verify all fixing nodes are placed BELOW the scan workflow (y = 26.0)
+    assert!(fix_orch.position.y > scan_y, "fix_orch must be below scan flow");
+    assert_eq!(fix_orch.position.y, 26.0);
+    assert_eq!(fix_rewrite.position.y, 26.0);
+    assert_eq!(fix_add_code.position.y, 26.0);
+    assert_eq!(fix_exec.position.y, 26.0);
+    assert_eq!(fix_verify.position.y, 26.0);
+    assert_eq!(fix_gate.position.y, 26.0);
+
+    // Verify strict 1-to-1 arrow sequence in fixing workflow
+    let e1 = flow.edges().iter().find(|e| e.source == "fix_orch").unwrap();
+    assert_eq!(e1.target, "fix_rewrite", "fix_orch connects to fix_rewrite");
+
+    let e2 = flow.edges().iter().find(|e| e.source == "fix_rewrite").unwrap();
+    assert_eq!(e2.target, "fix_add_code", "fix_rewrite connects to fix_add_code");
+
+    let e3 = flow.edges().iter().find(|e| e.source == "fix_add_code").unwrap();
+    assert_eq!(e3.target, "fix_exec", "fix_add_code connects to fix_exec");
+
+    let e4 = flow.edges().iter().find(|e| e.source == "fix_exec").unwrap();
+    assert_eq!(e4.target, "fix_verify", "fix_exec connects to fix_verify");
+
+    let e5 = flow.edges().iter().find(|e| e.source == "fix_verify").unwrap();
+    assert_eq!(e5.target, "fix_gate", "fix_verify connects to fix_gate");
+
+    // Verify NO crossing arrows between Scan workflow (Row 1) and Fixing workflow (Row 2)
+    for edge in flow.edges() {
+        let src_is_scan = edge.source == "orch" || edge.source.starts_with("scan_") || edge.source == "defense_gate";
+        let dst_is_scan = edge.target == "orch" || edge.target.starts_with("scan_") || edge.target == "defense_gate";
+        let src_is_fix = edge.source.starts_with("fix_");
+        let dst_is_fix = edge.target.starts_with("fix_");
+
+        if src_is_scan {
+            assert!(dst_is_scan, "Scan edge {} cannot cross into fixing workflow", edge.id);
+        }
+        if src_is_fix {
+            assert!(dst_is_fix, "Fixing edge {} cannot cross into scan workflow", edge.id);
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_chat_query_loading_indicator_and_cancellation() {
+    use asterisk::ui::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let target = PathBuf::from("./tests/fixtures/vulnerable_repo");
+    let mut app = App::new(target, false);
+    app.config.api_key = Some("test-key".to_string());
+
+    // User types normal question (not a slash command)
+    app.prompt_input = "explain the vulnerability in auth.rs".to_string();
+    app.submit_prompt_input();
+
+    // Verify loading state is triggered
+    assert!(app.is_chat_querying, "Submitting normal chat must set is_chat_querying = true");
+    assert!(app.action_msg.as_ref().unwrap().contains("thinking"), "action_msg must display thinking indicator");
+
+    // Press Esc to cancel query
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+    assert!(!app.is_chat_querying, "Pressing Esc must cancel query and reset is_chat_querying to false");
+    assert!(app.action_msg.as_ref().unwrap().contains("cancelled"), "action_msg must reflect query cancellation");
+}
+
+#[test]
+fn test_sqlite_session_full_lifecycle() {
+    use asterisk::core::StateStore;
+    use asterisk::types::{ChatMessage, Severity, VulnerabilityFinding, HardeningPatch};
+    use std::path::PathBuf;
+
+    let mut store = StateStore::in_memory().expect("in-memory sqlite");
+
+    let session_id = "sess-test-123";
+    let project_id = "/tmp/test-proj";
+    let provider = "Custom";
+
+    let messages = vec![
+        ChatMessage::User("how to fix SQL injection in login handler?".to_string()),
+        ChatMessage::Agent {
+            sender: "orchestrator".to_string(),
+            text: "Use parameterized queries or AST-based sanitizers.".to_string(),
+        },
+    ];
+
+    let findings = vec![
+        VulnerabilityFinding {
+            id: "VULN-001".to_string(),
+            title: "SQL Injection".to_string(),
+            cwe: "CWE-89".to_string(),
+            severity: Severity::Critical,
+            file_path: PathBuf::from("src/auth.rs"),
+            line_number: 42,
+            snippet: "db.execute(format!(\"SELECT * FROM users WHERE user='{}'\", u))".to_string(),
+            description: "Raw SQL concatenation".to_string(),
+            recommendation: "Use sqlx params".to_string(),
+            patched: false,
+            reachability: "REACHABLE".to_string(),
+            triage_verdict: "TRUE_POSITIVE".to_string(),
+            triage_reasoning: "Direct sink execution".to_string(),
+            call_path: vec!["main".to_string(), "login".to_string()],
+        },
+    ];
+
+    let patches = vec![
+        HardeningPatch {
+            id: "PATCH-001".to_string(),
+            finding_id: "VULN-001".to_string(),
+            target_file: PathBuf::from("src/auth.rs"),
+            original_snippet: "raw_query".to_string(),
+            hardened_snippet: "param_query".to_string(),
+            unified_diff: "+param_query".to_string(),
+            unit_test_code: "assert!(true)".to_string(),
+            applied: false,
+            explanation: "Converted to parameterized query".to_string(),
+            unit_test_passed: true,
+            safe_outputs_passed: true,
+        },
+    ];
+
+    // 1. Save session
+    store.save_session_full(session_id, project_id, provider, &messages, &findings, &patches)
+        .expect("save_session_full succeeds");
+
+    // 2. List sessions
+    let sessions = store.list_sessions(project_id).expect("list_sessions succeeds");
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].session_id, session_id);
+    assert_eq!(sessions[0].message_count, 2);
+    assert_eq!(sessions[0].findings_count, 1);
+    assert!(sessions[0].title.contains("SQL injection"));
+
+    // 3. Load session
+    let (loaded_msgs, loaded_findings, loaded_patches) = store.load_session_full(session_id)
+        .expect("load_session_full succeeds");
+
+    assert_eq!(loaded_msgs.len(), 2);
+    match &loaded_msgs[0] {
+        ChatMessage::User(txt) => assert!(txt.contains("SQL injection")),
+        _ => panic!("Expected ChatMessage::User"),
+    }
+    assert_eq!(loaded_findings.len(), 1);
+    assert_eq!(loaded_findings[0].id, "VULN-001");
+    assert_eq!(loaded_patches.len(), 1);
+    assert_eq!(loaded_patches[0].id, "PATCH-001");
+}
+
+#[test]
+fn test_app_slash_commands_sessions_new_and_grill_me() {
+    use asterisk::ui::App;
+    use asterisk::types::ChatMessage;
+
+    let target = PathBuf::from("./tests/fixtures/vulnerable_repo");
+    let mut app = App::new(target, false);
+
+    // Initial session ID should be set
+    assert!(!app.current_session_id.is_empty(), "current_session_id must be initialized");
+    let initial_session_id = app.current_session_id.clone();
+
+    // 1. Test /sessions command (viewing history)
+    app.prompt_input = "/sessions".to_string();
+    app.submit_prompt_input();
+
+    let last_msg = app.chat_messages.last().expect("must have message");
+    match last_msg {
+        ChatMessage::Agent { text, .. } => {
+            assert!(text.contains("Asterisk Audit & Chat Sessions"), "Should display sessions table");
+            assert!(text.contains(&initial_session_id), "Should include active session ID");
+        }
+        _ => panic!("Expected Agent message for /sessions"),
+    }
+
+    // 2. Test /new command (new session)
+    app.prompt_input = "/new".to_string();
+    app.submit_prompt_input();
+
+    assert_ne!(app.current_session_id, initial_session_id, "New session must produce a new session ID");
+    let new_last_msg = app.chat_messages.last().expect("must have message");
+    match new_last_msg {
+        ChatMessage::Agent { text, .. } => {
+            assert!(text.contains("New Security Session Initialized"), "Should display new session banner");
+            assert!(text.contains(&initial_session_id), "Should note archived previous session");
+        }
+        _ => panic!("Expected Agent message for /new"),
+    }
+
+    // 3. Test /grill-me command
+    app.prompt_input = "/grill-me".to_string();
+    app.submit_prompt_input();
+
+    assert!(app.is_grill_mode, "Entering /grill-me must activate is_grill_mode");
+    assert_eq!(app.grill_step, 1, "Grill step must be 1");
+    let grill_msg = app.chat_messages.last().expect("must have grill message");
+    match grill_msg {
+        ChatMessage::Agent { sender, text } => {
+            assert_eq!(sender, "security_architect");
+            assert!(text.contains("Grill-Me: Adversarial Security Architecture Review"));
+            assert!(text.contains("Question 1/5"));
+        }
+        _ => panic!("Expected Agent message for /grill-me"),
+    }
+
+    // 4. Test /done command (exiting grill-me and synthesizing plan)
+    app.prompt_input = "/done".to_string();
+    app.submit_prompt_input();
+
+    assert!(!app.is_grill_mode, "/done must exit grill mode");
+    let plan_msg = app.chat_messages.last().expect("must have plan message");
+    match plan_msg {
+        ChatMessage::Agent { sender, text } => {
+            assert_eq!(sender, "security_architect");
+            assert!(text.contains("Hardened Security Architecture Plan"), "Must synthesize hardened security plan");
+            assert!(text.contains("Ingress Boundary Conformance"));
+            assert!(text.contains("Taint Neutralization"));
+        }
+        _ => panic!("Expected Agent message for /done"),
+    }
+}
+
+#[test]
+fn test_spinner_rotation_timing() {
+    let spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+    // Frame indices at simulated milliseconds offset:
+    let idx_0ms = (0u128 / 80) as usize % spinner_frames.len();
+    let idx_160ms = (160u128 / 80) as usize % spinner_frames.len();
+    let idx_400ms = (400u128 / 80) as usize % spinner_frames.len();
+
+    assert_eq!(idx_0ms, 0);
+    assert_eq!(idx_160ms, 2);
+    assert_eq!(idx_400ms, 5);
+    assert_ne!(spinner_frames[idx_0ms], spinner_frames[idx_160ms]);
+    assert_ne!(spinner_frames[idx_160ms], spinner_frames[idx_400ms]);
+}

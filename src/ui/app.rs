@@ -1,17 +1,17 @@
 use crate::ui::theme::th;
 use crate::execution::{EngineCommand, EngineMessage, ExecutionEngine};
-use crate::orchestrator::{AgentGraphBuilder, DefensePlan, WorkspaceScanner};
+use crate::orchestrator::{AgentGraphBuilder, DefensePlan, StrategyPlanner, WorkspaceScanner};
 use crate::skills::SkillRegistry;
 use crate::core::{
     AppConfig, PolicyGate, SecurityAgentHub, SecurityContextRules,
-    WorktreeSandbox,
+    StateStore, WorktreeSandbox,
 };
 use crate::subagents::{
     ApkAndContainerGuardAgent, AutoHardeningAgent, MalwareShieldAgent, SecretHunterAgent,
 };
 use crate::types::{
     get_matching_commands, AgentStatus, AiProvider, ChatMessage, DynamicLogEntry, HardeningPatch,
-    SproutedNodeInfo, VulnerabilityFinding, WorkspaceProfile,
+    SproutedNodeInfo, VulnerabilityFinding, WorkflowPlan, WorkflowTaskNode, WorkspaceProfile,
 };
 use crate::orchestrator::graph::AgentNodeContent;
 use crate::ui::views::{
@@ -20,7 +20,7 @@ use crate::ui::views::{
 };
 use chrono::Utc;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use rataflow::{Flow, FlowEvent, StepEdge};
+use rataflow::{Flow, FlowEvent, Node, StepEdge};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -90,6 +90,7 @@ pub struct App {
     pub last_flow_tick: std::time::Instant,
     pub nodes_info: HashMap<String, SproutedNodeInfo>,
     pub selected_node_id: Option<String>,
+    pub current_workflow_plan: Option<WorkflowPlan>,
 
     pub profile: WorkspaceProfile,
     pub plan: Option<DefensePlan>,
@@ -140,6 +141,11 @@ pub struct App {
     pub theme_picker_index: usize,
     pub theme_before_picker: String,
     pub findings_filter_reachable: bool,
+    pub is_chat_querying: bool,
+    pub current_session_id: String,
+    pub is_grill_mode: bool,
+    pub grill_step: usize,
+    pub grill_answers: Vec<(String, String)>,
 }
 
 impl App {
@@ -169,6 +175,7 @@ impl App {
             last_flow_tick: std::time::Instant::now(),
             nodes_info,
             selected_node_id: None,
+            current_workflow_plan: None,
             profile,
             plan: None,
             findings: Vec::new(),
@@ -215,7 +222,43 @@ impl App {
             theme_picker_index: 0,
             theme_before_picker: String::new(),
             findings_filter_reachable: false,
+            is_chat_querying: false,
+            current_session_id: format!("sess-{}", chrono::Utc::now().timestamp_millis()),
+            is_grill_mode: false,
+            grill_step: 0,
+            grill_answers: Vec::new(),
         }
+    }
+
+    pub fn persist_current_session(&mut self) {
+        if let Ok(mut store) = StateStore::for_project(&self.target_dir) {
+            let proj_id = self.target_dir.display().to_string();
+            let _ = store.save_session_full(
+                &self.current_session_id,
+                &proj_id,
+                self.active_provider.name(),
+                &self.chat_messages,
+                &self.findings,
+                &self.patches,
+            );
+        }
+    }
+
+    pub fn load_session_by_id(&mut self, session_id: &str) -> Result<(usize, usize), String> {
+        let store = StateStore::for_project(&self.target_dir)
+            .map_err(|e| format!("Cannot open state store: {e}"))?;
+        let (messages, findings, patches) = store.load_session_full(session_id)?;
+        let m_count = messages.len();
+        let f_count = findings.len();
+        self.chat_messages = messages;
+        if !findings.is_empty() {
+            self.findings = findings;
+        }
+        if !patches.is_empty() {
+            self.patches = patches;
+        }
+        self.current_session_id = session_id.to_string();
+        Ok((m_count, f_count))
     }
 
     pub fn open_help_modal(&mut self) {
@@ -408,7 +451,11 @@ impl App {
     }
 
     pub fn trigger_audit(&mut self) {
-        if self.is_running {
+        self.trigger_audit_with_directive(None);
+    }
+
+    pub fn trigger_audit_with_directive(&mut self, directive: Option<String>) {
+        if self.is_running || self.awaiting_confirmation {
             return;
         }
 
@@ -429,14 +476,110 @@ impl App {
 
         self.is_running = true;
         self.awaiting_confirmation = false;
-        self.action_msg = Some("scanning workspace...".to_string());
+        self.action_msg = Some(format!("AI model {} is inspecting workspace and reasoning...", self.config.get_model()));
 
-        // Construct dynamic workflow graph for target
-        self.nodes_info = AgentGraphBuilder::build_nodes_for_workspace(&self.target_dir);
-        if let Ok(flow) = AgentGraphBuilder::build_sprouted_graph(&self.nodes_info) {
-            self.flow = flow;
+        if let Some(ref dir) = directive {
+            self.chat_messages.push(ChatMessage::Thinking {
+                agent: "orchestrator".to_string(),
+                thought: format!("User directive received: \"{}\". Prioritizing target directory surfaces in threat reasoning...", dir),
+            });
         }
-        self.selected_node_id = Some("orch".to_string());
+
+        self.chat_messages.push(ChatMessage::Agent {
+            sender: "orchestrator".to_string(),
+            text: format!(
+                "🧠 **Inspecting repository architecture & threat surfaces...**\nTarget: `{}` | Model: `{}`{}",
+                self.target_dir.display(),
+                self.config.get_model(),
+                directive.as_ref().map(|d| format!("\nDirective: *\"{}\"*", d)).unwrap_or_default()
+            ),
+        });
+
+        let target = self.target_dir.clone();
+        let sender = self.engine_tx.clone();
+        let config = self.config.clone();
+        let dir_clone = directive.clone();
+
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let hub = SecurityAgentHub::new(
+                    target.clone(),
+                    std::sync::Arc::new(PolicyGate::default()),
+                    config,
+                );
+                match StrategyPlanner::generate_ai_workflow_with_feedback(&hub, &target, dir_clone.as_deref(), Some(&sender)).await {
+                    Ok(plan) => {
+                        let _ = sender.send(EngineMessage::WorkflowPlanProposed(plan));
+                    }
+                    Err(err) => {
+                        let _ = sender.send(EngineMessage::Chat(ChatMessage::Agent {
+                            sender: "orchestrator".to_string(),
+                            text: format!("⚠️ AI workflow synthesis stopped: {err}\nPlease verify your API key or model configuration."),
+                        }));
+                        let _ = sender.send(EngineMessage::ScanFinished);
+                    }
+                }
+            });
+        } else {
+            let _ = sender.send(EngineMessage::Chat(ChatMessage::Agent {
+                sender: "orchestrator".to_string(),
+                text: "⚠️ Async runtime handle unavailable for AI workflow generation.".to_string(),
+            }));
+            let _ = sender.send(EngineMessage::ScanFinished);
+        }
+    }
+
+    pub fn confirm_subagent_deployment(&mut self) {
+        if !self.awaiting_confirmation {
+            return;
+        }
+        self.awaiting_confirmation = false;
+        self.is_running = true;
+        self.action_msg = Some("executing approved dynamic workflow...".to_string());
+
+        // Derive execution sequence from horizontal X and vertical Y position of active nodes
+        let mut active_task_positions: Vec<(String, f64, f64)> = self.flow
+            .nodes()
+            .filter(|n| n.id != "orch" && n.id != "defense_gate")
+            .map(|n| (n.id.clone(), n.position.x, n.position.y))
+            .collect();
+        active_task_positions.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal).then(a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal)));
+
+        let plan_map: HashMap<String, WorkflowTaskNode> = self.current_workflow_plan
+            .as_ref()
+            .map(|p| p.nodes.iter().map(|n| (n.id.clone(), n.clone())).collect())
+            .unwrap_or_default();
+
+        let mut ordered_tasks = Vec::new();
+        for (idx, (id, _, _)) in active_task_positions.into_iter().enumerate() {
+            if let Some(mut task) = plan_map.get(&id).cloned() {
+                task.order = idx;
+                ordered_tasks.push(task);
+            } else {
+                ordered_tasks.push(WorkflowTaskNode {
+                    id: id.clone(),
+                    title: id.clone(),
+                    subtitle: String::new(),
+                    agent: "sast".to_string(),
+                    tier: "subagent".to_string(),
+                    targets: Vec::new(),
+                    description: String::new(),
+                    order: idx,
+                    depends_on: Vec::new(),
+                });
+            }
+        }
+
+        let initially_paused: std::collections::HashSet<String> = self.nodes_info
+            .iter()
+            .filter(|(_, v)| v.is_paused)
+            .map(|(k, _)| k.clone())
+            .collect();
+
+        self.chat_messages.push(ChatMessage::System(format!(
+            "Workflow confirmed with {} active task(s). Starting execution...",
+            ordered_tasks.len()
+        )));
 
         let target = self.target_dir.clone();
         let sender = self.engine_tx.clone();
@@ -449,27 +592,72 @@ impl App {
         let diff_scope = self.diff_scope.clone();
         let provider_name = self.active_provider.name().to_string();
         let config = self.config.clone();
+
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
                 let engine = ExecutionEngine::new(target, sender, cmd_rx)
                     .with_diff_scope(diff_scope)
                     .with_active_provider(provider_name)
-                    .with_config(config);
+                    .with_config(config)
+                    .with_tasks(ordered_tasks)
+                    .with_paused_nodes(initially_paused);
                 engine.run_autonomous_audit().await;
             });
         }
     }
 
-    pub fn confirm_subagent_deployment(&mut self) {
-        self.awaiting_confirmation = false;
-        let _ = self.cmd_tx.send(EngineCommand::ConfirmDeploy);
-    }
-
     pub fn cancel_subagent_deployment(&mut self) {
         self.awaiting_confirmation = false;
         self.is_running = false;
+        self.action_msg = Some("workflow cancelled by user".to_string());
+        self.chat_messages.push(ChatMessage::System("Scan cancelled. Workflow discarded.".to_string()));
     }
 
+    pub fn delete_selected_workflow_node(&mut self) {
+        if !self.awaiting_confirmation {
+            return;
+        }
+        if let Some(id) = &self.selected_node_id {
+            let id_str = id.clone();
+            if id_str == "orch" || id_str == "defense_gate" {
+                self.action_msg = Some("cannot delete orchestrator or defense gate".to_string());
+                return;
+            }
+            if AgentGraphBuilder::remove_workflow_node(&mut self.flow, &mut self.nodes_info, &id_str) {
+                if let Some(plan) = &mut self.current_workflow_plan {
+                    plan.nodes.retain(|n| n.id != id_str);
+                }
+                self.action_msg = Some(format!("deleted task '{}' from workflow", id_str));
+                self.chat_messages.push(ChatMessage::System(format!("Removed task node '{}' from workflow plan.", id_str)));
+                self.selected_node_id = self.nodes_info.keys().find(|k| *k != "orch" && *k != "defense_gate").cloned().or_else(|| Some("orch".to_string()));
+            }
+        }
+    }
+
+    pub fn shift_selected_workflow_node(&mut self, delta_x: f64, delta_y: f64) {
+        if !self.awaiting_confirmation {
+            return;
+        }
+        if let Some(id) = &self.selected_node_id {
+            let id_str = id.clone();
+            if id_str == "orch" || id_str == "defense_gate" {
+                return;
+            }
+            AgentGraphBuilder::shift_node(&mut self.flow, &self.nodes_info, &id_str, delta_x, delta_y);
+            let dir_str = if delta_x < 0.0 {
+                "earlier"
+            } else if delta_x > 0.0 {
+                "later"
+            } else if delta_y < 0.0 {
+                "upwards"
+            } else {
+                "downwards"
+            };
+            self.action_msg = Some(format!("repositioned task '{}' {}", id_str, dir_str));
+        }
+    }
+
+    #[allow(dead_code)]
     pub fn toggle_pause_selected_node(&mut self) {
         if let Some(id) = &self.selected_node_id {
             let node_id = id.clone();
@@ -479,16 +667,70 @@ impl App {
                 self.action_msg = Some(format!("node {} {state_str}", node.id));
 
                 if node.is_paused {
-                    let _ = self.cmd_tx.send(EngineCommand::PauseNode(node_id));
+                    let _ = self.cmd_tx.send(EngineCommand::PauseNode(node_id.clone()));
                 } else {
-                    let _ = self.cmd_tx.send(EngineCommand::ResumeNode(node_id));
+                    let _ = self.cmd_tx.send(EngineCommand::ResumeNode(node_id.clone()));
                 }
-            }
-            if let Ok(mut updated_flow) = AgentGraphBuilder::build_sprouted_graph(&self.nodes_info) {
-                updated_flow.viewport = self.flow.viewport;
-                self.flow = updated_flow;
+
+                if let Some(content) = self.flow.node_content_mut(&node_id) {
+                    content.is_paused = node.is_paused;
+                }
+                AgentGraphBuilder::rechain_workflow_edges(&mut self.flow, &self.nodes_info);
             }
         }
+    }
+
+    pub fn toggle_pause_total(&mut self) {
+        let any_paused = self.nodes_info.values().any(|n| n.is_paused);
+        let should_pause = !any_paused;
+
+        let node_ids: Vec<String> = self.nodes_info.keys().cloned().collect();
+
+        if should_pause {
+            let _ = self.cmd_tx.send(EngineCommand::PauseNode("*".to_string()));
+            for node in self.nodes_info.values_mut() {
+                node.is_paused = true;
+                if node.status == AgentStatus::Running {
+                    node.status = AgentStatus::Paused;
+                }
+            }
+            for id in &node_ids {
+                if let Some(content) = self.flow.node_content_mut(id) {
+                    content.is_paused = true;
+                    if content.status == AgentStatus::Running {
+                        content.status = AgentStatus::Paused;
+                    }
+                }
+            }
+            self.action_msg = Some("⏸ EXECUTION PAUSED TOTAL [Esc / Space to resume]".to_string());
+            self.chat_messages.push(ChatMessage::Agent {
+                sender: "orchestrator".to_string(),
+                text: "⏸ **Execution Paused Total**: All active scanning threads suspended. Flow animations stopped (grayed out). Press `[Esc]`, `[Space]`, or type `/pause` to resume.".to_string(),
+            });
+        } else {
+            let _ = self.cmd_tx.send(EngineCommand::ResumeNode("*".to_string()));
+            for node in self.nodes_info.values_mut() {
+                node.is_paused = false;
+                if node.status == AgentStatus::Paused {
+                    node.status = AgentStatus::Running;
+                }
+            }
+            for id in &node_ids {
+                if let Some(content) = self.flow.node_content_mut(id) {
+                    content.is_paused = false;
+                    if content.status == AgentStatus::Paused {
+                        content.status = AgentStatus::Running;
+                    }
+                }
+            }
+            self.action_msg = Some("▶ EXECUTION RESUMED".to_string());
+            self.chat_messages.push(ChatMessage::Agent {
+                sender: "orchestrator".to_string(),
+                text: "▶ **Execution Resumed**: Continuing autonomous workflow pipeline.".to_string(),
+            });
+        }
+
+        AgentGraphBuilder::rechain_workflow_edges(&mut self.flow, &self.nodes_info);
     }
 
     pub fn check_defense_gate_status(&mut self) {
@@ -497,10 +739,10 @@ impl App {
             if let Some(gate) = self.nodes_info.get_mut("defense_gate") {
                 gate.status = AgentStatus::Success;
             }
-            if let Ok(mut updated_flow) = AgentGraphBuilder::build_sprouted_graph(&self.nodes_info) {
-                updated_flow.viewport = self.flow.viewport;
-                self.flow = updated_flow;
+            if let Some(content) = self.flow.node_content_mut("defense_gate") {
+                content.status = AgentStatus::Success;
             }
+            AgentGraphBuilder::rechain_workflow_edges(&mut self.flow, &self.nodes_info);
             self.action_msg = Some("all vulnerabilities mitigated. defense gate open.".to_string());
         }
     }
@@ -580,11 +822,59 @@ impl App {
                 EngineMessage::NodeStatusChanged { id, status } => {
                     if let Some(node) = self.nodes_info.get_mut(&id) {
                         node.status = status;
+                        if status == AgentStatus::Paused {
+                            node.is_paused = true;
+                        } else if status == AgentStatus::Running {
+                            node.is_paused = false;
+                        }
                     }
-                    if let Ok(mut updated_flow) = AgentGraphBuilder::build_sprouted_graph(&self.nodes_info) {
-                        updated_flow.viewport = self.flow.viewport;
-                        self.flow = updated_flow;
+                    if let Some(content) = self.flow.node_content_mut(&id) {
+                        content.status = status;
+                        if status == AgentStatus::Paused {
+                            content.is_paused = true;
+                        } else if status == AgentStatus::Running {
+                            content.is_paused = false;
+                        }
                     }
+                    AgentGraphBuilder::rechain_workflow_edges(&mut self.flow, &self.nodes_info);
+                }
+                EngineMessage::FixingWorkflowStarted { actionable_count } => {
+                    AgentGraphBuilder::append_fixing_workflow(&mut self.flow, &mut self.nodes_info, actionable_count);
+                    self.action_msg = Some(format!("fixing workflow sprouted ({actionable_count} actionable findings)"));
+                    self.flow.request_fit_view();
+                }
+                EngineMessage::WorkflowNodeAppended { node, parent_id } => {
+                    let parent_pos = self.flow.node(&parent_id).map(|n| (n.position.x, n.position.y));
+                    let max_y = self.flow.nodes().map(|n| n.position.y).fold(14.0_f64, f64::max);
+
+                    let new_x = parent_pos.map(|p| p.0 + 4.0).unwrap_or(70.0);
+                    let new_y = max_y + 7.0; // Place directly underneath existing branches
+
+                    let sprouted = SproutedNodeInfo {
+                        id: node.id.clone(),
+                        label: format!("{}\n{}", node.title, node.subtitle),
+                        tier: "workflow_task".to_string(),
+                        target_path: None,
+                        status: AgentStatus::Idle,
+                        details: node.description.clone(),
+                        findings_count: 0,
+                        is_paused: false,
+                    };
+                    self.nodes_info.insert(node.id.clone(), sprouted);
+
+                    let content = AgentNodeContent {
+                        id: node.id.clone(),
+                        title: node.title.clone(),
+                        subtitle: node.subtitle.clone(),
+                        tier: node.tier.clone(),
+                        status: AgentStatus::Idle,
+                        is_paused: false,
+                        findings_count: 0,
+                    };
+
+                    let rata_node = Node::new(node.id.clone(), (new_x, new_y), (26.0, 5.0), content);
+                    let _ = self.flow.add_node(rata_node);
+                    AgentGraphBuilder::rechain_workflow_edges(&mut self.flow, &self.nodes_info);
                 }
                 EngineMessage::WorkspaceUpdated(p) => {
                     self.profile = p;
@@ -601,8 +891,39 @@ impl App {
                 EngineMessage::Log(l) => {
                     self.logs.push(l);
                 }
+                EngineMessage::WorkflowPlanProposed(plan) => {
+                    if let Ok(flow) = AgentGraphBuilder::build_from_workflow_plan(&plan, &mut self.nodes_info) {
+                        self.flow = flow;
+                    }
+                    let node_count = plan.nodes.len();
+                    self.current_workflow_plan = Some(plan);
+                    self.current_tab = 0;
+                    self.awaiting_confirmation = true;
+                    self.is_running = false;
+                    self.selected_node_id = self.nodes_info.keys().find(|k| *k != "orch" && *k != "defense_gate").cloned().or_else(|| Some("orch".to_string()));
+                    self.action_msg = Some("workflow proposed. [d] delete, [←/→] move, [y/Enter] confirm".to_string());
+                    self.chat_messages.push(ChatMessage::Agent {
+                        sender: "orchestrator".to_string(),
+                        text: format!(
+                            "📋 **Custom Security Workflow Proposed by AI**\n\
+                             Analyzed workspace architecture and synthesized **{}** modular audit tasks.\n\n\
+                             **Interactive Workflow Controls:**\n\
+                             • `[d]` / `[Del]`: Delete highlighted task node\n\
+                             • `[←]` / `[→]`: Reorder task execution sequence (left-to-right)\n\
+                             • `[y]` / `[Enter]`: Confirm & begin autonomous scan\n\
+                             • `[n]` / `[Esc]`: Cancel workflow",
+                            node_count
+                        ),
+                    });
+                }
                 EngineMessage::Chat(msg) => {
+                    self.is_chat_querying = false;
                     self.chat_messages.push(msg);
+                }
+                EngineMessage::ChatQueryFinished => {
+                    self.is_chat_querying = false;
+                    self.action_msg = None;
+                    self.persist_current_session();
                 }
                 EngineMessage::AwaitingConfirmation => {
                     self.awaiting_confirmation = true;
@@ -612,6 +933,8 @@ impl App {
                     self.is_running = false;
                     self.awaiting_confirmation = false;
                     self.check_defense_gate_status();
+                    AgentGraphBuilder::rechain_workflow_edges(&mut self.flow, &self.nodes_info);
+                    self.persist_current_session();
                     self.action_msg = Some(format!(
                         "scan finished. {} findings, {} patches ready.",
                         self.findings.len(),
@@ -1331,8 +1654,64 @@ impl App {
             }
         }
 
+        // Interactive Workflow Controls when awaiting confirmation
+        if self.awaiting_confirmation && (self.prompt_input.is_empty() || self.focused_pane == FocusedPane::Workflow) {
+            match key.code {
+                KeyCode::Char('d') | KeyCode::Delete => {
+                    self.delete_selected_workflow_node();
+                    return false;
+                }
+                KeyCode::Left | KeyCode::Char('h') if self.current_tab == 0 => {
+                    self.shift_selected_workflow_node(-36.0, 0.0);
+                    return false;
+                }
+                KeyCode::Right | KeyCode::Char('l') if self.current_tab == 0 => {
+                    self.shift_selected_workflow_node(36.0, 0.0);
+                    return false;
+                }
+                KeyCode::Up | KeyCode::Char('k') if self.current_tab == 0 => {
+                    self.shift_selected_workflow_node(0.0, -7.0);
+                    return false;
+                }
+                KeyCode::Down | KeyCode::Char('j') if self.current_tab == 0 => {
+                    self.shift_selected_workflow_node(0.0, 7.0);
+                    return false;
+                }
+                KeyCode::Char('y') => {
+                    self.confirm_subagent_deployment();
+                    return false;
+                }
+                KeyCode::Char('n') => {
+                    self.cancel_subagent_deployment();
+                    return false;
+                }
+                KeyCode::Enter if self.prompt_input.is_empty() => {
+                    self.confirm_subagent_deployment();
+                    return false;
+                }
+                KeyCode::Esc if self.prompt_input.is_empty() => {
+                    self.cancel_subagent_deployment();
+                    return false;
+                }
+                _ => {}
+            }
+        }
+
         match key.code {
             KeyCode::Esc => {
+                if self.is_chat_querying {
+                    self.is_chat_querying = false;
+                    self.action_msg = Some("chat query cancelled".to_string());
+                    self.chat_messages.push(ChatMessage::Agent {
+                        sender: "orchestrator".to_string(),
+                        text: "⏹ Chat query cancelled by user.".to_string(),
+                    });
+                    return false;
+                }
+                if self.is_running {
+                    self.toggle_pause_total();
+                    return false;
+                }
                 let is_double_esc = self
                     .last_esc_press
                     .map(|t| t.elapsed() < Duration::from_millis(600))
@@ -1440,9 +1819,7 @@ impl App {
                 self.suggestion_index = 0;
             }
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.is_running {
-                    self.toggle_pause_selected_node();
-                }
+                self.toggle_pause_total();
             }
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if !self.patches.is_empty() {
@@ -1462,6 +1839,10 @@ impl App {
                 self.export_security_report();
             }
             KeyCode::Char(' ') if self.prompt_input.is_empty() => {
+                if self.is_running {
+                    self.toggle_pause_total();
+                    return false;
+                }
                 if self.current_tab == 4 {
                     if let Some(skill) = self.skills.skills.get_mut(self.selected_skill_index) {
                         skill.active = !skill.active;
@@ -1627,6 +2008,10 @@ impl App {
                            | `/export` | Export defense audit report to JSON & Markdown |\n\
                            | `/theme [name]` | Open interactive theme picker, or switch directly (`[Ctrl+T]` cycles) |\n\
                            | `/pause` | Pause / resume selected agent node in workflow |\n\
+                           | `/sessions [id]` | View history & switch between chat sessions |\n\
+                           | `/new` | Initialize fresh security session & archive state |\n\
+                           | `/grill-me` | Adversarial security architecture interview mode |\n\
+                           | `/done` | Conclude interview & synthesize hardened plan |\n\
                            | `/clear` | Clear chat message history |\n\
                            | `/help` | Display this command reference |\n\
                            | `/exit` | Exit asterisk defense harness |\n\n\
@@ -1669,7 +2054,155 @@ impl App {
                     self.action_msg = Some(format!("unknown theme '{arg}' — type /theme to list presets"));
                 }
             } else if input == "/pause" || input == "pause" {
-                self.toggle_pause_selected_node();
+                self.toggle_pause_total();
+            } else if input == "/sessions" || input == "sessions" || input == "/sessions list" {
+                self.persist_current_session();
+                let proj_id = self.target_dir.display().to_string();
+                if let Ok(store) = StateStore::for_project(&self.target_dir) {
+                    match store.list_sessions(&proj_id) {
+                        Ok(summaries) => {
+                            if summaries.is_empty() {
+                                self.chat_messages.push(ChatMessage::Agent {
+                                    sender: "orchestrator".to_string(),
+                                    text: format!(
+                                        "### 🗂️ Asterisk Audit & Chat Sessions\n\n\
+                                         • **Current Active Session**: `{}`\n\
+                                         No prior archived sessions found in SQLite database.\n\
+                                         Use `/new` to archive this session and start fresh.",
+                                        self.current_session_id
+                                    ),
+                                });
+                            } else {
+                                let mut table = format!(
+                                    "### 🗂️ Asterisk Audit & Chat Sessions\n\n\
+                                     | Session ID | Created | Provider | Msgs | Issues | Status |\n\
+                                     | :--- | :--- | :--- | :---: | :---: | :--- |\n"
+                                );
+                                for s in &summaries {
+                                    let is_active = s.session_id == self.current_session_id;
+                                    let status = if is_active { "🟢 **Active**" } else { "Saved" };
+                                    let time_str = chrono::DateTime::from_timestamp_millis(s.created_at)
+                                        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                                        .unwrap_or_else(|| "Unknown".to_string());
+                                    table.push_str(&format!(
+                                        "| `{}` | {} | {} | {} | {} | {} |\n",
+                                        s.session_id, time_str, s.active_provider, s.message_count, s.findings_count, status
+                                    ));
+                                }
+                                table.push_str(
+                                    "\n**Session Commands:**\n\
+                                     • `/sessions <session_id>` — Switch to a past session and resume chat & findings\n\
+                                     • `/new` — Initialize a fresh session and archive current workspace state"
+                                );
+                                self.chat_messages.push(ChatMessage::Agent {
+                                    sender: "orchestrator".to_string(),
+                                    text: table,
+                                });
+                            }
+                            self.action_msg = Some(format!("listed {} sessions", summaries.len()));
+                        }
+                        Err(e) => {
+                            self.action_msg = Some(format!("failed to list sessions: {e}"));
+                        }
+                    }
+                }
+            } else if let Some(target_sess) = input.strip_prefix("/sessions ").or_else(|| input.strip_prefix("/session ")) {
+                let target_id = target_sess.trim().trim_matches('`').to_string();
+                if target_id == self.current_session_id {
+                    self.action_msg = Some(format!("already on session: {target_id}"));
+                    self.chat_messages.push(ChatMessage::Agent {
+                        sender: "orchestrator".to_string(),
+                        text: format!("ℹ️ Session `{target_id}` is already active."),
+                    });
+                } else {
+                    self.persist_current_session();
+                    match self.load_session_by_id(&target_id) {
+                        Ok((m_count, f_count)) => {
+                            self.current_session_id = target_id.clone();
+                            self.action_msg = Some(format!("switched to session {target_id}"));
+                            self.chat_messages.push(ChatMessage::Agent {
+                                sender: "orchestrator".to_string(),
+                                text: format!(
+                                    "✓ **Session Loaded**: Switched to session `{target_id}`.\n\
+                                     Restored **{m_count}** messages and **{f_count}** findings."
+                                ),
+                            });
+                        }
+                        Err(e) => {
+                            self.action_msg = Some(format!("failed to load session: {e}"));
+                            self.chat_messages.push(ChatMessage::Agent {
+                                sender: "orchestrator".to_string(),
+                                text: format!("⚠️ Could not load session `{target_id}`: {e}"),
+                            });
+                        }
+                    }
+                }
+            } else if input == "/new" || input == "new" || input == "/new session" {
+                self.persist_current_session();
+                let old_id = self.current_session_id.clone();
+                let new_id = format!("sess-{}", chrono::Utc::now().timestamp_millis());
+                self.current_session_id = new_id.clone();
+                self.chat_messages.clear();
+                self.findings.clear();
+                self.patches.clear();
+                self.nodes_info.clear();
+                self.flow = Flow::new();
+                self.is_grill_mode = false;
+                self.grill_step = 0;
+                self.grill_answers.clear();
+                self.action_msg = Some("new session initialized".to_string());
+                self.chat_messages.push(ChatMessage::Agent {
+                    sender: "orchestrator".to_string(),
+                    text: format!(
+                        "### ✻ Asterisk — New Security Session Initialized\n\n\
+                         • **Session ID**: `{}`\n\
+                         • **Archived Previous Session**: `{}`\n\
+                         • **Target Directory**: `{}`\n\
+                         • **Active Model**: {} (`{}`)\n\n\
+                         The previous session was automatically persisted to SQLite. Type `/sessions` to switch back anytime.\n\
+                         Ready for autonomous vulnerability triage, AST dataflow analysis, or conversational security review.\n\
+                         Type `/scan` or press `[Space]` to begin an audit.",
+                        new_id, old_id, self.target_dir.display(), self.active_provider.name(), self.config.get_model()
+                    ),
+                });
+                self.persist_current_session();
+            } else if input == "/grill-me" || input == "grill-me" {
+                self.is_grill_mode = true;
+                self.grill_step = 1;
+                self.grill_answers.clear();
+                self.action_msg = Some("grill-me adversarial review started".to_string());
+                self.chat_messages.push(ChatMessage::Agent {
+                    sender: "security_architect".to_string(),
+                    text: "### 🛡️ Asterisk Grill-Me: Adversarial Security Architecture Review\n\n\
+                           *Entering interactive security review mode. I will interview you as an adversarial Principal Security Architect to probe your system's attack surface, trust boundaries, and threat model.*\n\n\
+                           Type `/done` or `/exit-grill` at any time to synthesize your responses into a Hardened Security Plan.\n\n\
+                           ---\n\
+                           **Question 1/5: Threat Modeling & Trust Boundaries**\n\
+                           What are the primary untrusted entry points into this codebase (e.g., public HTTP endpoints, RPCs, CLI arguments, file uploads, background workers), and exactly how are incoming requests authenticated and authorized before parsing?".to_string(),
+                });
+            } else if input == "/done" || input == "done" || input == "/exit-grill" {
+                if self.is_grill_mode {
+                    self.is_grill_mode = false;
+                    let total_answers = self.grill_answers.len();
+                    self.action_msg = Some("grill-me interview completed & plan synthesized".to_string());
+                    self.chat_messages.push(ChatMessage::Agent {
+                        sender: "security_architect".to_string(),
+                        text: format!(
+                            "### 📋 Asterisk Hardened Security Architecture Plan\n\n\
+                             **Review Status**: ✓ Completed ({total_answers} architectural domains analyzed).\n\n\
+                             #### Synthesized Hardening Directives & Mitigations:\n\
+                             1. **Ingress Boundary Conformance**: Enforce zero-trust validation and schema sanitization at all perimeter entrypoints before unmarshaling payloads.\n\
+                             2. **Taint Neutralization & Cedar Guardrails**: Parameterize all AST sink flows and apply strict Cedar policy gating on all sensitive operations.\n\
+                             3. **Secret Storage & Rotation**: Isolate all API tokens into dedicated environment vaults with 30-day automated rotation and leak scanners.\n\
+                             4. **Subprocess & Worktree Isolation**: Restrict command executions to Landlock/seccomp sandboxes or isolated worktree checkouts.\n\
+                             5. **Supply Chain Defense**: Verify package lockfiles against typosquatting databases with Pre-Install Malware Shield.\n\n\
+                             *Plan saved to session history. Run `/scan` to execute autonomous AST verification against these boundaries.*"
+                        ),
+                    });
+                    self.persist_current_session();
+                } else {
+                    self.action_msg = Some("not currently in grill-me mode — type /grill-me to start".to_string());
+                }
             } else if input == "/apply" || input == "apply" || input == "/patch" || input == "patch" || input == "a" {
                 self.apply_current_patch();
             } else if input == "/rollback" || input == "rollback" || input == "r" {
@@ -1682,7 +2215,32 @@ impl App {
                 } else if input.contains("--diff-scope=full") {
                     self.diff_scope = "FULL".to_string();
                 }
-                self.trigger_audit();
+
+                let raw_args = if let Some(stripped) = input.strip_prefix("/scan ") {
+                    stripped.trim()
+                } else if let Some(stripped) = input.strip_prefix("/audit ") {
+                    stripped.trim()
+                } else if let Some(stripped) = input.strip_prefix("scan ") {
+                    stripped.trim()
+                } else if let Some(stripped) = input.strip_prefix("audit ") {
+                    stripped.trim()
+                } else {
+                    ""
+                };
+
+                let cleaned_args = raw_args
+                    .replace("--diff-scope=local", "")
+                    .replace("--diff-scope=full", "")
+                    .trim()
+                    .to_string();
+
+                let directive = if cleaned_args.is_empty() {
+                    None
+                } else {
+                    Some(cleaned_args)
+                };
+
+                self.trigger_audit_with_directive(directive);
             } else if input == "/secrets" || input == "secrets" {
                 let sec_findings = SecretHunterAgent::scan(&self.target_dir);
                 let count = sec_findings.len();
@@ -1981,9 +2539,33 @@ impl App {
                 }
                 self.chat_scroll = 0;
                 self.chat_messages.push(ChatMessage::User(input.clone()));
+                self.is_chat_querying = true;
+                self.action_msg = Some(format!("Asterisk is thinking via {}...", self.config.get_model()));
                 let hub = SecurityAgentHub::new(self.target_dir.clone(), Arc::new(PolicyGate::default()), self.config.clone());
                 let sender = self.engine_tx.clone();
-                let prompt_text = input.clone();
+
+                if self.is_grill_mode {
+                    self.grill_answers.push((format!("Domain {}", self.grill_step), input.clone()));
+                    self.grill_step += 1;
+                }
+
+                let prompt_text = if self.is_grill_mode {
+                    format!(
+                        "[SYSTEM DIRECTIVE: ADVERSARIAL PRINCIPAL SECURITY ARCHITECT - GRILL-ME REVIEW]\n\
+                         You are Asterisk's Principal Security Architect conducting an adversarial security review of the user's project.\n\
+                         The user responded to Domain {}: \"{}\".\n\n\
+                         Directives:\n\
+                         1. Critically analyze their response. Identify attack vectors, unhandled edge cases, trust boundary ambiguities, injection/taint sinks, or credential exposure vectors they missed.\n\
+                         2. Challenge their architectural assumptions with direct adversarial scenarios.\n\
+                         3. Pose Question {}/5 probing the next vital architectural boundary (e.g. data validation/taint sinks, secret storage & rotation, subprocess isolation, or supply chain dependencies).\n\
+                         Keep your tone adversarial yet constructive, sharp, and concise.",
+                        self.grill_step.saturating_sub(1),
+                        input,
+                        self.grill_step.min(5)
+                    )
+                } else {
+                    input.clone()
+                };
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {
                     handle.spawn(async move {
                         let reply = hub.query(&prompt_text).await;
@@ -1998,6 +2580,13 @@ impl App {
                             sender: "orchestrator".to_string(),
                             text: clean_text,
                         }));
+                        let _ = sender.send(EngineMessage::ChatQueryFinished);
+                    });
+                } else {
+                    self.is_chat_querying = false;
+                    self.chat_messages.push(ChatMessage::Agent {
+                        sender: "orchestrator".to_string(),
+                        text: "⚠️ Async runtime handle unavailable for chat query.".to_string(),
                     });
                 }
             }
@@ -2224,9 +2813,39 @@ impl App {
                         return;
                     }
                 }
+                if let Some(btn_del) = sidebar_targets.btn_delete_node {
+                    if in_rect(btn_del, col, row) {
+                        self.delete_selected_workflow_node();
+                        return;
+                    }
+                }
+                if let Some(btn_left) = sidebar_targets.btn_move_left {
+                    if in_rect(btn_left, col, row) {
+                        self.shift_selected_workflow_node(-36.0, 0.0);
+                        return;
+                    }
+                }
+                if let Some(btn_right) = sidebar_targets.btn_move_right {
+                    if in_rect(btn_right, col, row) {
+                        self.shift_selected_workflow_node(36.0, 0.0);
+                        return;
+                    }
+                }
+                if let Some(btn_up) = sidebar_targets.btn_move_up {
+                    if in_rect(btn_up, col, row) {
+                        self.shift_selected_workflow_node(0.0, -7.0);
+                        return;
+                    }
+                }
+                if let Some(btn_down) = sidebar_targets.btn_move_down {
+                    if in_rect(btn_down, col, row) {
+                        self.shift_selected_workflow_node(0.0, 7.0);
+                        return;
+                    }
+                }
                 if let Some(btn_pause) = sidebar_targets.btn_pause {
                     if in_rect(btn_pause, col, row) {
-                        self.toggle_pause_selected_node();
+                        self.toggle_pause_total();
                         return;
                     }
                 }
@@ -2514,7 +3133,12 @@ impl App {
         f.render_widget(header_block, root_chunks[0]);
 
         let spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        let spinner_idx = (self.last_flow_tick.elapsed().as_millis() / 80) as usize % spinner_frames.len();
+        let spinner_idx = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            / 80) as usize
+            % spinner_frames.len();
         let spinner_char = spinner_frames[spinner_idx];
 
         let status_badge = if self.awaiting_confirmation {
@@ -2607,6 +3231,8 @@ impl App {
             &self.expanded_messages,
             !self.patches.is_empty(),
             is_chatbot_focused,
+            self.is_chat_querying,
+            &self.config.get_model(),
         );
         self.click_targets.sidebar = Some(sidebar_targets);
 

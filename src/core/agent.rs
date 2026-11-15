@@ -8,8 +8,21 @@ use rig::providers::anthropic::wire::AnthropicConfig;
 use rig::providers::gemini::GeminiConfig;
 use rig::providers::ollama::wire::OllamaConfig;
 use rig::providers::openai::wire::OpenAIConfig;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+#[derive(Debug, Clone)]
+pub struct SubagentAuditResult {
+    pub thought: Option<String>,
+    pub clean_text: String,
+    pub follow_up_verification: Option<FollowUpTarget>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FollowUpTarget {
+    pub target: String,
+    pub reason: String,
+}
 
 pub struct SecurityAgentHub {
     pub target_dir: PathBuf,
@@ -31,7 +44,7 @@ impl SecurityAgentHub {
     /// Returns the live model response or an explicit API error diagnostic.
     pub async fn query(&self, prompt: &str) -> String {
         let system_prompt = format!(
-            "You are Constellation, an autonomous pre-production code defense and security audit assistant.\nWorkspace Target: {}\n\nUser Question/Command:\n{}",
+            "You are Asterisk, an autonomous pre-production code defense and security audit assistant.\nWorkspace Target: {}\n\nUser Question/Command:\n{}",
             self.target_dir.display(),
             prompt
         );
@@ -170,17 +183,68 @@ impl SecurityAgentHub {
                     .unwrap_or_else(|| "custom-key".to_string());
                 let model_name = self.config.get_model();
 
-                let openai_cfg = OpenAIConfig::new(api_key).with_base_url(base_url.clone());
-                let client = openai_cfg.client();
-                let model = client.completion(model_name.clone());
-                let req = CompletionRequest::new(system_prompt);
+                // Direct HTTP call using reqwest to preserve reasoning_content / reasoning from OpenAI-compatible models (e.g. DeepSeek / vLLM)
+                let endpoint = if base_url.ends_with("/chat/completions") {
+                    base_url.clone()
+                } else if base_url.ends_with('/') {
+                    format!("{base_url}chat/completions")
+                } else {
+                    format!("{base_url}/chat/completions")
+                };
 
-                match model.call(req).await {
-                    Ok(res) => extract_completion_text(&res),
-                    Err(e) => format!(
-                        "⚠️ **Custom Provider API Request Failed**\nEndpoint: `{}`\nModel: `{}`\nError: `{}`\nTip: You can change endpoint via `/url <url>`, key via `/key <key>`, or model via `/model <model>`.",
-                        base_url, model_name, e
-                    ),
+                let http_client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(60))
+                    .build()
+                    .unwrap_or_default();
+
+                let body = serde_json::json!({
+                    "model": model_name,
+                    "messages": [
+                        {"role": "user", "content": system_prompt}
+                    ]
+                });
+
+                let res = http_client
+                    .post(&endpoint)
+                    .header("Authorization", format!("Bearer {api_key}"))
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+                    .send()
+                    .await;
+
+                match res {
+                    Ok(resp) if resp.status().is_success() => {
+                        if let Ok(json) = resp.json::<serde_json::Value>().await {
+                            let message = &json["choices"][0]["message"];
+                            let content = message["content"].as_str().unwrap_or_default().to_string();
+                            let reasoning = message["reasoning"]
+                                .as_str()
+                                .or_else(|| message["reasoning_content"].as_str())
+                                .unwrap_or_default();
+
+                            if !reasoning.is_empty() {
+                                format!("<think>\n{}\n</think>\n{}", reasoning, content)
+                            } else {
+                                content
+                            }
+                        } else {
+                            "⚠️ **Custom Provider Response Error**: Unable to parse JSON response body.".to_string()
+                        }
+                    }
+                    Ok(resp) => {
+                        let status = resp.status();
+                        let text = resp.text().await.unwrap_or_default();
+                        format!(
+                            "⚠️ **Custom Provider API Request Failed** (HTTP {status})\nEndpoint: `{}`\nModel: `{}`\nResponse: `{}`\nTip: You can change endpoint via `/url <url>`, key via `/key <key>`, or model via `/model <model>`.",
+                            endpoint, model_name, text
+                        )
+                    }
+                    Err(e) => {
+                        format!(
+                            "⚠️ **Custom Provider API Request Failed**\nEndpoint: `{}`\nModel: `{}`\nError: `{}`\nTip: You can change endpoint via `/url <url>`, key via `/key <key>`, or model via `/model <model>`.",
+                            endpoint, model_name, e
+                        )
+                    }
                 }
             }
 
@@ -209,6 +273,101 @@ impl SecurityAgentHub {
                 }
             }
         }
+    }
+
+    /// Audits code from a specialized subagent perspective using live AI provider.
+    pub async fn query_subagent(
+        &self,
+        agent_id: &str,
+        title: &str,
+        targets: &[String],
+        target_dir: &Path,
+    ) -> Result<SubagentAuditResult, String> {
+        let mut context = String::new();
+        let mut checked_files = 0;
+        for t in targets {
+            let path = target_dir.join(t);
+            if path.is_file() {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    let preview: Vec<&str> = content.lines().take(60).collect();
+                    context.push_str(&format!("\n--- Target: {} ---\n{}\n", t, preview.join("\n")));
+                    checked_files += 1;
+                    if checked_files >= 3 {
+                        break;
+                    }
+                }
+            }
+        }
+
+        let prompt = format!(
+            "You are security subagent '{}' ({}) analyzing target repository '{}'.\n\
+             Files to analyze:\n{}\n\n\
+             Instructions:\n\
+             1. Think through potential security risks, taint flows, or vulnerabilities inside <think>...</think>.\n\
+             2. Provide your concise audit findings.\n\
+             3. If your analysis detects that another uninspected file or component must be verified (e.g. secondary endpoints, auth modules, database queries), add this exact marker:\n\
+             VERIFY_FOLLOWUP: <target_file> | <reason>",
+            title, agent_id, target_dir.display(),
+            if context.is_empty() { "(general directory scope)" } else { &context }
+        );
+
+        let raw = self.query(&prompt).await;
+
+        if raw.starts_with("⚠️ ")
+            || raw.contains("API Request Failed")
+            || raw.contains("API Key Missing")
+            || raw.contains("Connection Error")
+        {
+            return Err(raw);
+        }
+
+        let (thought, clean_text) = parse_ai_thinking_content(&raw);
+
+        // Check if follow-up verification was requested by the AI
+        let mut follow_up_verification = None;
+        for line in raw.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("VERIFY_FOLLOWUP:") {
+                let parts: Vec<&str> = rest.splitn(2, '|').collect();
+                if !parts.is_empty() {
+                    let target = parts[0].trim().to_string();
+                    let reason = parts.get(1).map(|s| s.trim()).unwrap_or("Secondary verification required").to_string();
+                    if !target.is_empty() {
+                        follow_up_verification = Some(FollowUpTarget { target, reason });
+                        break;
+                    }
+                }
+            }
+        }
+
+        if follow_up_verification.is_none() {
+            for line in raw.lines() {
+                let lower = line.to_lowercase();
+                if lower.contains("must verify") || lower.contains("need to verify") || lower.contains("should verify") {
+                    for word in line.split_whitespace() {
+                        let clean_word = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '/' && c != '.' && c != '_' && c != '-');
+                        if (clean_word.ends_with(".rs") || clean_word.ends_with(".py") || clean_word.ends_with(".js") || clean_word.ends_with(".ts") || clean_word.ends_with(".go"))
+                            && !targets.iter().any(|t| t.contains(clean_word))
+                        {
+                            follow_up_verification = Some(FollowUpTarget {
+                                target: clean_word.to_string(),
+                                reason: format!("AI discovered unverified dependency: {}", clean_word),
+                            });
+                            break;
+                        }
+                    }
+                    if follow_up_verification.is_some() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(SubagentAuditResult {
+            thought,
+            clean_text,
+            follow_up_verification,
+        })
     }
 }
 

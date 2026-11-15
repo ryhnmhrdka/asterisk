@@ -16,6 +16,11 @@ pub struct SidebarClickTargets {
     pub btn_cancel: Option<Rect>,
     pub btn_pause: Option<Rect>,
     pub btn_apply: Option<Rect>,
+    pub btn_delete_node: Option<Rect>,
+    pub btn_move_left: Option<Rect>,
+    pub btn_move_right: Option<Rect>,
+    pub btn_move_up: Option<Rect>,
+    pub btn_move_down: Option<Rect>,
     pub subagent_rows: Vec<(String, Rect)>,
     pub user_msg_expand: Vec<(usize, Rect)>,
     pub suggestion_rows: Vec<(&'static str, &'static str, Rect)>,
@@ -37,6 +42,8 @@ impl SidebarView {
         expanded_messages: &HashSet<usize>,
         has_patches: bool,
         is_focused: bool,
+        is_chat_querying: bool,
+        querying_model: &str,
     ) -> SidebarClickTargets {
         let est_input_width = area.width;
         let wrap_width = (est_input_width.saturating_sub(6) as usize).max(10);
@@ -97,6 +104,11 @@ impl SidebarView {
             btn_cancel: None,
             btn_pause: None,
             btn_apply: None,
+            btn_delete_node: None,
+            btn_move_left: None,
+            btn_move_right: None,
+            btn_move_up: None,
+            btn_move_down: None,
             subagent_rows: Vec::new(),
             user_msg_expand: Vec::new(),
             suggestion_rows: Vec::new(),
@@ -325,6 +337,26 @@ impl SidebarView {
             all_chat_lines.push((Line::raw(""), None));
         }
 
+        if is_chat_querying {
+            let spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let frame_idx = (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                / 80) as usize
+                % spinner_frames.len();
+            let spinner = spinner_frames[frame_idx];
+
+            all_chat_lines.push((
+                Line::from(vec![
+                    Span::styled(format!("  {} ", spinner), Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("Asterisk is thinking ({querying_model})..."), Style::default().fg(th().text_muted).add_modifier(Modifier::ITALIC)),
+                ]),
+                None,
+            ));
+            all_chat_lines.push((Line::raw(""), None));
+        }
+
         let visible_height = chunks[0].height as usize;
         let total_visual_lines = all_chat_lines.len();
         let max_scroll = total_visual_lines.saturating_sub(visible_height);
@@ -352,8 +384,50 @@ impl SidebarView {
             action_spans.push(Span::raw("  "));
             let mut opt_pause = None;
             let mut opt_apply = None;
+            let mut opt_del = None;
+            let mut opt_left = None;
+            let mut opt_right = None;
+            let mut opt_up = None;
+            let mut opt_down = None;
 
-            if node.status == AgentStatus::Running || node.is_paused {
+            if awaiting_confirmation && node.id != "orch" && node.id != "defense_gate" {
+                let d_rect = Rect::new(node_area.x + 2, node_area.y + 2, 8.min(node_area.width.saturating_sub(4)), 1);
+                let l_rect = Rect::new(node_area.x + 11, node_area.y + 2, 6.min(node_area.width.saturating_sub(13)), 1);
+                let r_rect = Rect::new(node_area.x + 18, node_area.y + 2, 6.min(node_area.width.saturating_sub(20)), 1);
+                let u_rect = Rect::new(node_area.x + 25, node_area.y + 2, 5.min(node_area.width.saturating_sub(27)), 1);
+                let dn_rect = Rect::new(node_area.x + 31, node_area.y + 2, 5.min(node_area.width.saturating_sub(33)), 1);
+
+                action_spans.push(Span::styled(
+                    " [✕Del] ",
+                    Style::default().fg(th().destructive).bg(th().element_hi).add_modifier(Modifier::BOLD),
+                ));
+                action_spans.push(Span::raw(" "));
+                action_spans.push(Span::styled(
+                    " [◀] ",
+                    Style::default().fg(th().fg).bg(th().element_hi),
+                ));
+                action_spans.push(Span::raw(" "));
+                action_spans.push(Span::styled(
+                    " [▶] ",
+                    Style::default().fg(th().fg).bg(th().element_hi),
+                ));
+                action_spans.push(Span::raw(" "));
+                action_spans.push(Span::styled(
+                    " [▲] ",
+                    Style::default().fg(th().fg).bg(th().element_hi),
+                ));
+                action_spans.push(Span::raw(" "));
+                action_spans.push(Span::styled(
+                    " [▼] ",
+                    Style::default().fg(th().fg).bg(th().element_hi),
+                ));
+
+                opt_del = Some(d_rect);
+                opt_left = Some(l_rect);
+                opt_right = Some(r_rect);
+                opt_up = Some(u_rect);
+                opt_down = Some(dn_rect);
+            } else if node.status == AgentStatus::Running || node.is_paused {
                 action_spans.push(Span::styled(
                     if node.is_paused { " [ ▶ Resume ] " } else { " [ ⏸ Pause ] " },
                     Style::default().fg(th().fg).bg(th().element_hi),
@@ -370,7 +444,7 @@ impl SidebarView {
                 opt_apply = Some(a_rect);
             }
 
-            if opt_pause.is_none() && opt_apply.is_none() {
+            if opt_pause.is_none() && opt_apply.is_none() && opt_del.is_none() {
                 action_spans.push(Span::styled("no pending actions", Style::default().fg(th().text_dim)));
             }
 
@@ -390,6 +464,11 @@ impl SidebarView {
             f.render_widget(Paragraph::new(lines).block(node_block), node_area);
             targets.btn_pause = opt_pause;
             targets.btn_apply = opt_apply;
+            targets.btn_delete_node = opt_del;
+            targets.btn_move_left = opt_left;
+            targets.btn_move_right = opt_right;
+            targets.btn_move_up = opt_up;
+            targets.btn_move_down = opt_down;
         }
 
         // 3. Clickable Confirmation Buttons
@@ -463,8 +542,22 @@ impl SidebarView {
             .scroll((scroll_y, 0));
         f.render_widget(prompt_paragraph, inner_input);
 
+        let spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let frame_idx = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            / 80) as usize
+            % spinner_frames.len();
+        let spinner = spinner_frames[frame_idx];
+
         // Subtitle hint row beneath input box
-        let hint_line = if is_focused {
+        let hint_line = if is_chat_querying {
+            Line::from(vec![
+                Span::styled(format!("  {} Thinking... ", spinner), Style::default().fg(th().primary).add_modifier(Modifier::BOLD)),
+                Span::styled("Press [Esc] to cancel", Style::default().fg(th().text_muted)),
+            ])
+        } else if is_focused {
             hint_line(
                 &[("/", "commands"), ("[Tab]", "complete"), ("[Enter]", "send")],
                 prompt_chunks[1].width as usize,

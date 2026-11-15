@@ -1,42 +1,10 @@
-# ✻ Asterisk
-
-> **Autonomous Pre-Production Code Defense & Security Orchestration Harness**  
-> *Engineered in Rust with Ratatui & Rataflow for developer-first repository defense.*
+![logo](https://res.cloudinary.com/erwj1yyu/image/upload/v1794731959/logo_2_l4k5e6.png)
 
 [![Rust](https://img.shields.io/badge/rust-2024_edition-orange.svg)](https://www.rust-lang.org/)
 [![Ratatui](https://img.shields.io/badge/tui-ratatui_v0.30-blue.svg)](https://ratatui.rs/)
 [![Storage](https://img.shields.io/badge/storage-SQLite_WAL-informational.svg)](https://www.sqlite.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
----
-
-```
-                   .============.                  
-                   .============.                  
-                   .====....====.                  
-       ....        .====.  .====.        ....      
-       .====:..    .====.  .====.    ..:====.      
-     ..========:....====.  .====....:========..    
-    ..====--======-:====.  .====:-======--====..   
-   ..====:....======**==.  .==**======....:====..  
-  .:=====:..  ...-==*##*.  .*##*==-...  ..:=====:. 
-  ..-=======:..  ...=##*.  .*##=...  ..:=======-.. 
-     ..:=======:...  ..-.  .-..  ...:=======:..    
-        ..:======*=...        ...=*======:..       
-           ..:*######+.      .+######*:..          
-        ..:-====+*+:..        ..:+*+=====:..       
-     ..:=======-...  ..-.  .-... ...-=======:..    
-  ..:=======:..  ...=##*.  .*##=...  ..:=======:.. 
-  .:=====:..  ...-==*##*.  .*##*==-...  ..:=====:. 
-   ..====:....-=====**+=.  .=+**=====-....:====:.  
-    ..====--======-:====.  .====:-======--====..   
-     ..========-.. .====.  .====....-========..    
-       .====:..    .====.  .====.    ..:====.      
-       ....        .====.  .====.        ....      
-                   .====....====.                  
-                   .============.                  
-                   .============.                  
-```
 
 **Asterisk** is a terminal-native, autonomous security harness that inspects, triages, and hardens codebases directly on local developer machines before code is committed, built, or deployed.
 
@@ -68,7 +36,7 @@ Powered by **Ratatui** and **Rataflow**, Asterisk combines static AST taint anal
 Asterisk includes an automated installer that detects your OS, installs required compilation tools, builds the release binary, and configures symlinks:
 
 ```bash
-git clone https://github.com/kartikacyber/asterisk.git
+git clone https://github.com/ryhnmhrdkaa/asterisk.git
 cd asterisk
 ./install.sh
 ```

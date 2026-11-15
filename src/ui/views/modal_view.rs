@@ -1010,9 +1010,148 @@ impl ModalView {
                 Span::styled("   /config   ", Style::default().fg(th().primary).bg(th().element).add_modifier(Modifier::BOLD)),
                 Span::styled(" Credential & endpoint status", Style::default().fg(th().text)),
             ]),
+            Line::from(vec![
+                Span::styled("   /sessions ", Style::default().fg(th().primary).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Switch chat session popup", Style::default().fg(th().text)),
+            ]),
+            Line::from(vec![
+                Span::styled("   /grill-me ", Style::default().fg(th().primary).bg(th().element).add_modifier(Modifier::BOLD)),
+                Span::styled(" Adversarial architect review", Style::default().fg(th().text)),
+            ]),
         ];
 
         f.render_widget(Paragraph::new(left_lines), columns[0]);
         f.render_widget(Paragraph::new(right_lines), columns[1]);
+    }
+
+    pub fn render_session_list(
+        f: &mut Frame,
+        area: Rect,
+        sessions: &[crate::core::storage::SessionSummary],
+        selected_index: usize,
+        current_session_id: &str,
+    ) -> ModalClickTargets {
+        let modal_width = 78.min(area.width.saturating_sub(4));
+        let modal_height = 18.min(area.height.saturating_sub(2));
+
+        let x = (area.width.saturating_sub(modal_width)) / 2;
+        let y = (area.height.saturating_sub(modal_height)) / 2;
+        let modal_rect = Rect::new(x, y, modal_width, modal_height);
+
+        f.render_widget(Clear, modal_rect);
+        let bg_block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(th().primary))
+            .title(Span::styled(
+                "  🗂️ Audit & Chat Sessions (SQLite Store)  ",
+                Style::default().fg(th().fg).add_modifier(Modifier::BOLD),
+            ))
+            .style(Style::default().bg(th().bg));
+        f.render_widget(bg_block, modal_rect);
+
+        let inner_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .margin(1)
+            .constraints([
+                Constraint::Min(6),    // List of sessions
+                Constraint::Length(1), // Footer hotkeys
+            ])
+            .split(modal_rect);
+
+        let mut targets = ModalClickTargets {
+            provider_buttons: Vec::new(),
+            model_preset_buttons: Vec::new(),
+            field_rects: Vec::new(),
+            btn_setup_credentials: None,
+            btn_save: None,
+            btn_cancel: None,
+        };
+
+        let list_area = inner_chunks[0];
+        let items_per_page = (list_area.height as usize / 2).max(1);
+
+        let scroll_offset = if selected_index >= items_per_page {
+            selected_index.saturating_sub(items_per_page - 1)
+        } else {
+            0
+        };
+
+        let mut lines = Vec::new();
+        let mut row_y = list_area.y;
+
+        for (i, sess) in sessions.iter().enumerate().skip(scroll_offset).take(items_per_page) {
+            let is_sel = i == selected_index;
+            let is_active = sess.session_id == current_session_id;
+
+            let item_rect = Rect::new(list_area.x, row_y, list_area.width, 2);
+            targets.model_preset_buttons.push((sess.session_id.clone(), item_rect));
+            row_y += 2;
+
+            let (badge_text, badge_style) = if is_active {
+                ("● ACTIVE", Style::default().fg(th().success).add_modifier(Modifier::BOLD))
+            } else {
+                ("○ SAVED", Style::default().fg(th().text_muted))
+            };
+
+            let time_str = chrono::DateTime::from_timestamp_millis(sess.created_at)
+                .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| "Unknown".to_string());
+
+            let title_w = (list_area.width as usize).saturating_sub(32).max(12);
+            let truncated_title = ellipsize(&sess.title, title_w);
+            let metrics = format!("{} msgs · {} vulns", sess.message_count, sess.findings_count);
+
+            if is_sel {
+                lines.push(Line::from(vec![
+                    Span::styled(" ▸ ", Style::default().fg(th().on_accent).bg(th().fg).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("{:<width$} ", truncated_title, width = title_w), Style::default().fg(th().on_accent).bg(th().fg).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" {:<8} ", badge_text), Style::default().fg(th().element_hi).bg(th().fg).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" {:<10} ", sess.active_provider), Style::default().fg(th().border).bg(th().fg)),
+                ]));
+                let detail_text = format!("     ID: {}  ·  {}  ·  {}", sess.session_id, time_str, metrics);
+                lines.push(Line::from(vec![
+                    Span::styled(detail_text, Style::default().fg(th().border).bg(th().fg)),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::raw("   "),
+                    Span::styled(format!("{:<width$} ", truncated_title, width = title_w), Style::default().fg(th().fg)),
+                    Span::styled(format!(" {:<8} ", badge_text), badge_style),
+                    Span::styled(format!(" {:<10} ", sess.active_provider), Style::default().fg(th().primary)),
+                ]));
+                let detail_text = format!("     ID: {}  ·  {}  ·  {}", sess.session_id, time_str, metrics);
+                lines.push(Line::from(vec![
+                    Span::styled(detail_text, Style::default().fg(th().text_muted)),
+                ]));
+            }
+        }
+
+        if lines.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("   No saved sessions in database yet.", Style::default().fg(th().text_muted)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled(format!("   Current session: {}", current_session_id), Style::default().fg(th().text_sub)),
+            ]));
+        }
+
+        f.render_widget(Paragraph::new(lines), list_area);
+
+        let footer_line = hint_line(
+            &[
+                ("[↑/↓]", "select"),
+                ("[Enter]", "switch session"),
+                ("[n]", "new session"),
+                ("[Esc]", "close"),
+            ],
+            inner_chunks[1].width as usize,
+            Style::default().fg(th().primary),
+            Style::default().fg(th().border_hi),
+            "  •  ",
+        );
+        f.render_widget(Paragraph::new(footer_line), inner_chunks[1]);
+
+        targets
     }
 }

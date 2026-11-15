@@ -409,10 +409,21 @@ impl StateStore {
         patches: &[HardeningPatch],
     ) -> Result<(), String> {
         let now = chrono::Utc::now().timestamp_millis();
-        let _ = self.conn.execute(
-            "INSERT OR IGNORE INTO projects (id, root_path, security_md_hash, tech_stack_json, updated_at) VALUES (?1, ?2, '', '{}', ?3);",
-            params![project_id, project_id, now],
-        );
+        let existing_project_id: Option<String> = self.conn.query_row(
+            "SELECT id FROM projects WHERE id = ?1 OR root_path = ?2 LIMIT 1;",
+            params![project_id, project_id],
+            |row| row.get(0),
+        ).ok();
+
+        let effective_proj_id = if let Some(existing_id) = existing_project_id {
+            existing_id
+        } else {
+            let _ = self.conn.execute(
+                "INSERT OR IGNORE INTO projects (id, root_path, security_md_hash, tech_stack_json, updated_at) VALUES (?1, ?2, '', '{}', ?3);",
+                params![project_id, project_id, now],
+            );
+            project_id.to_string()
+        };
 
         let patches_json = serde_json::to_string(patches).unwrap_or_else(|_| "[]".to_string());
         self.conn.execute(
@@ -420,9 +431,8 @@ impl StateStore {
              VALUES (?1, ?2, 'AUDIT_ONLY', 'FULL', ?3, ?4, '', ?5)
              ON CONFLICT(session_id) DO UPDATE SET
                 active_provider = excluded.active_provider,
-                canvas_layout_json = excluded.canvas_layout_json,
-                created_at = excluded.created_at;",
-            params![session_id, project_id, provider, patches_json, now],
+                canvas_layout_json = excluded.canvas_layout_json;",
+            params![session_id, effective_proj_id, provider, patches_json, now],
         ).map_err(|e| format!("Failed to upsert audit session: {e}"))?;
 
         let _ = self.conn.execute("DELETE FROM session_chat_messages WHERE session_id = ?1;", params![session_id]);
@@ -437,18 +447,29 @@ impl StateStore {
         }
         tx.commit().map_err(|e| format!("Failed to commit messages: {e}"))?;
 
+        let _ = self.conn.execute("DELETE FROM security_findings WHERE session_id = ?1;", params![session_id]);
         if !findings.is_empty() {
+            let orch_agent = format!("orch-{}", session_id);
             let _ = self.conn.execute(
-                "INSERT OR IGNORE INTO sub_agent_runs (agent_id, session_id, role_specialty, loaded_skills_json, status) VALUES (?1, ?2, 'orchestrator', '[]', 'COMPLETED');",
-                params!["orch", session_id],
+                "INSERT INTO sub_agent_runs (agent_id, session_id, role_specialty, loaded_skills_json, status)
+                 VALUES (?1, ?2, 'orchestrator', '[]', 'COMPLETED')
+                 ON CONFLICT(agent_id) DO UPDATE SET session_id = excluded.session_id;",
+                params![orch_agent, session_id],
             );
-            let _ = self.save_findings(session_id, "orch", findings);
+            let _ = self.save_findings(session_id, &orch_agent, findings);
         }
 
         Ok(())
     }
 
     pub fn list_sessions(&self, project_id: &str) -> Result<Vec<SessionSummary>, String> {
+        let existing_project_id: Option<String> = self.conn.query_row(
+            "SELECT id FROM projects WHERE id = ?1 OR root_path = ?2 LIMIT 1;",
+            params![project_id, project_id],
+            |row| row.get(0),
+        ).ok();
+        let target_project_id = existing_project_id.as_deref().unwrap_or(project_id);
+
         let mut stmt = self.conn.prepare(
             "SELECT s.session_id, s.created_at, s.active_provider,
                     (SELECT COUNT(*) FROM session_chat_messages WHERE session_id = s.session_id) as msg_count,
@@ -458,7 +479,7 @@ impl StateStore {
              ORDER BY s.created_at DESC;",
         ).map_err(|e| format!("Query prepare error: {e}"))?;
 
-        let rows = stmt.query_map(params![project_id], |row| {
+        let rows = stmt.query_map(params![target_project_id], |row| {
             let session_id: String = row.get(0)?;
             let created_at: i64 = row.get(1)?;
             let active_provider: String = row.get(2)?;

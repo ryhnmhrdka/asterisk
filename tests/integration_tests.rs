@@ -2151,18 +2151,19 @@ fn test_app_slash_commands_sessions_new_and_grill_me() {
     assert!(!app.current_session_id.is_empty(), "current_session_id must be initialized");
     let initial_session_id = app.current_session_id.clone();
 
-    // 1. Test /sessions command (viewing history)
+    // 1. Test /sessions command (opens interactive sessions popup)
     app.prompt_input = "/sessions".to_string();
     app.submit_prompt_input();
 
-    let last_msg = app.chat_messages.last().expect("must have message");
-    match last_msg {
-        ChatMessage::Agent { text, .. } => {
-            assert!(text.contains("Asterisk Audit & Chat Sessions"), "Should display sessions table");
-            assert!(text.contains(&initial_session_id), "Should include active session ID");
-        }
-        _ => panic!("Expected Agent message for /sessions"),
-    }
+    assert!(app.show_key_modal, "/sessions must open popup modal");
+    assert_eq!(app.active_modal, asterisk::ui::ActiveModal::SelectSession, "active_modal must be SelectSession");
+    assert!(!app.sessions_list.is_empty(), "sessions_list must be populated from sqlite store");
+    assert!(app.action_msg.as_ref().unwrap().contains("sessions"), "action_msg must indicate browsing sessions");
+
+    // Press Esc to close modal
+    app.handle_key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Esc, crossterm::event::KeyModifiers::empty()));
+    assert!(!app.show_key_modal, "Esc must close sessions modal");
+    assert_eq!(app.active_modal, asterisk::ui::ActiveModal::None);
 
     // 2. Test /new command (new session)
     app.prompt_input = "/new".to_string();
@@ -2225,4 +2226,83 @@ fn test_spinner_rotation_timing() {
     assert_eq!(idx_400ms, 5);
     assert_ne!(spinner_frames[idx_0ms], spinner_frames[idx_160ms]);
     assert_ne!(spinner_frames[idx_160ms], spinner_frames[idx_400ms]);
+}
+
+#[test]
+fn test_strict_per_session_isolation_and_persistence() {
+    use asterisk::types::{ChatMessage, Severity, VulnerabilityFinding};
+    use asterisk::ui::App;
+
+    let target = PathBuf::from("./tests/fixtures/vulnerable_repo");
+    let mut app = App::new(target.clone(), false);
+
+    let session_1_id = app.current_session_id.clone();
+    assert!(!session_1_id.is_empty());
+
+    // 1. Populate Session 1 with findings, messages, and canvas state
+    app.chat_messages.push(ChatMessage::User("audit this repository for sql injection".to_string()));
+    app.findings.push(VulnerabilityFinding {
+        id: "finding-isolation-01".to_string(),
+        title: "Test SQL Injection".to_string(),
+        cwe: "CWE-89".to_string(),
+        severity: Severity::High,
+        file_path: PathBuf::from("src/db.rs"),
+        line_number: 42,
+        snippet: "SELECT * FROM users WHERE id = ".to_string(),
+        description: "Raw SQL query".to_string(),
+        recommendation: "Use parameterized queries".to_string(),
+        patched: false,
+        ..Default::default()
+    });
+    assert_eq!(app.findings.len(), 1);
+    assert_eq!(app.chat_messages.len(), 1);
+
+    // Persist session 1
+    app.persist_current_session();
+
+    // 2. Trigger /new -> must automatically persist session 1 and start fresh session 2
+    app.prompt_input = "/new".to_string();
+    app.submit_prompt_input();
+
+    let session_2_id = app.current_session_id.clone();
+    assert_ne!(session_1_id, session_2_id, "Session 2 must have a distinct ID");
+
+    // Session 2 MUST be completely clean and isolated: 0 findings, 0 patches, clean canvas
+    assert_eq!(app.findings.len(), 0, "Session 2 must have 0 findings (no leak from session 1)");
+    assert_eq!(app.patches.len(), 0, "Session 2 must have 0 patches");
+    assert_eq!(app.logs.len(), 0, "Session 2 must have clean logs");
+    assert_eq!(app.nodes_info.len(), 0, "Session 2 must have clean canvas nodes");
+    assert_eq!(app.chat_messages.len(), 1, "Session 2 should only have its initial welcome message");
+
+    // 3. Add user prompt to session 2
+    app.chat_messages.push(ChatMessage::User("check package dependencies for malware".to_string()));
+    assert_eq!(app.chat_messages.len(), 2);
+    assert_eq!(app.findings.len(), 0);
+    app.persist_current_session();
+
+    // 4. Switch back to Session 1 via load_session_by_id
+    let res = app.load_session_by_id(&session_1_id);
+    assert!(res.is_ok(), "Must successfully load session 1");
+    let (_m_count, f_count) = res.unwrap();
+    assert_eq!(f_count, 1, "Session 1 must restore 1 finding");
+    assert_eq!(app.findings.len(), 1, "App state must have 1 finding");
+    assert_eq!(app.findings[0].id, "finding-isolation-01");
+    assert_eq!(app.current_session_id, session_1_id);
+
+    // 5. Switch back to Session 2 -> must restore 0 findings and NOT retain session 1 findings!
+    let res2 = app.load_session_by_id(&session_2_id);
+    assert!(res2.is_ok(), "Must successfully load session 2");
+    let (_m_count2, f_count2) = res2.unwrap();
+    assert_eq!(f_count2, 0, "Session 2 must have 0 findings");
+    assert_eq!(app.findings.len(), 0, "App state must NOT leak findings from session 1!");
+    assert_eq!(app.current_session_id, session_2_id);
+
+    // 6. Test modal [n] hotkey starts another clean session
+    app.open_sessions_modal();
+    assert!(app.show_key_modal);
+    app.handle_key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Char('n'), crossterm::event::KeyModifiers::empty()));
+    assert!(!app.show_key_modal, "Pressing 'n' in modal must close modal and init new session");
+    let session_3_id = app.current_session_id.clone();
+    assert_ne!(session_3_id, session_2_id);
+    assert_eq!(app.findings.len(), 0, "Session 3 must be clean");
 }

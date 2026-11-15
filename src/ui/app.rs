@@ -53,6 +53,7 @@ pub enum ActiveModal {
     ConfigDashboard,
     SelectTheme,
     Help,
+    SelectSession,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +147,8 @@ pub struct App {
     pub is_grill_mode: bool,
     pub grill_step: usize,
     pub grill_answers: Vec<(String, String)>,
+    pub sessions_list: Vec<crate::core::storage::SessionSummary>,
+    pub selected_session_index: usize,
 }
 
 impl App {
@@ -227,6 +230,8 @@ impl App {
             is_grill_mode: false,
             grill_step: 0,
             grill_answers: Vec::new(),
+            sessions_list: Vec::new(),
+            selected_session_index: 0,
         }
     }
 
@@ -244,6 +249,49 @@ impl App {
         }
     }
 
+    pub fn start_new_session(&mut self) -> String {
+        self.persist_current_session();
+        let old_id = self.current_session_id.clone();
+        let new_id = format!("sess-{}", chrono::Utc::now().timestamp_millis());
+        self.current_session_id = new_id.clone();
+        self.chat_messages.clear();
+        self.findings.clear();
+        self.patches.clear();
+        self.logs.clear();
+        self.flow = Flow::new();
+        self.nodes_info.clear();
+        self.selected_node_id = None;
+        self.current_workflow_plan = None;
+        self.plan = None;
+        self.selected_matrix_row = 0;
+        self.selected_patch_row = 0;
+        self.is_grill_mode = false;
+        self.grill_step = 0;
+        self.grill_answers.clear();
+        self.is_running = false;
+        self.awaiting_confirmation = false;
+        self.is_chat_querying = false;
+        self.chat_scroll = 0;
+        self.expanded_messages.clear();
+        self.action_msg = Some("new session initialized".to_string());
+        self.chat_messages.push(ChatMessage::Agent {
+            sender: "orchestrator".to_string(),
+            text: format!(
+                "### ✻ Asterisk — New Security Session Initialized\n\n\
+                 • **Session ID**: `{}`\n\
+                 • **Archived Previous Session**: `{}`\n\
+                 • **Target Directory**: `{}`\n\
+                 • **Active Model**: {} (`{}`)\n\n\
+                 The previous session was automatically persisted to SQLite. Type `/sessions` to switch back anytime.\n\
+                 Ready for autonomous vulnerability triage, AST dataflow analysis, or conversational security review.\n\
+                 Type `/scan` or press `[Space]` to begin an audit.",
+                new_id, old_id, self.target_dir.display(), self.active_provider.name(), self.config.get_model()
+            ),
+        });
+        self.persist_current_session();
+        new_id
+    }
+
     pub fn load_session_by_id(&mut self, session_id: &str) -> Result<(usize, usize), String> {
         let store = StateStore::for_project(&self.target_dir)
             .map_err(|e| format!("Cannot open state store: {e}"))?;
@@ -251,14 +299,55 @@ impl App {
         let m_count = messages.len();
         let f_count = findings.len();
         self.chat_messages = messages;
-        if !findings.is_empty() {
-            self.findings = findings;
-        }
-        if !patches.is_empty() {
-            self.patches = patches;
-        }
+        self.findings = findings;
+        self.patches = patches;
+        self.logs.clear();
+        self.flow = Flow::new();
+        self.nodes_info.clear();
+        self.selected_node_id = None;
+        self.current_workflow_plan = None;
+        self.plan = None;
+        self.selected_matrix_row = 0;
+        self.selected_patch_row = 0;
+        self.is_grill_mode = false;
+        self.grill_step = 0;
+        self.grill_answers.clear();
+        self.is_running = false;
+        self.awaiting_confirmation = false;
+        self.is_chat_querying = false;
+        self.chat_scroll = 0;
+        self.expanded_messages.clear();
         self.current_session_id = session_id.to_string();
         Ok((m_count, f_count))
+    }
+
+    pub fn open_sessions_modal(&mut self) {
+        self.persist_current_session();
+        let proj_id = self.target_dir.display().to_string();
+        if let Ok(store) = StateStore::for_project(&self.target_dir) {
+            if let Ok(summaries) = store.list_sessions(&proj_id) {
+                self.sessions_list = summaries;
+            }
+        }
+        if self.sessions_list.is_empty() {
+            self.sessions_list.push(crate::core::storage::SessionSummary {
+                session_id: self.current_session_id.clone(),
+                created_at: chrono::Utc::now().timestamp_millis(),
+                active_provider: self.active_provider.name().to_string(),
+                message_count: self.chat_messages.len(),
+                findings_count: self.findings.len(),
+                title: "Current Active Session".to_string(),
+            });
+        }
+        self.selected_session_index = self
+            .sessions_list
+            .iter()
+            .position(|s| s.session_id == self.current_session_id)
+            .unwrap_or(0);
+
+        self.show_key_modal = true;
+        self.active_modal = ActiveModal::SelectSession;
+        self.action_msg = Some(format!("browsing {} sessions", self.sessions_list.len()));
     }
 
     pub fn open_help_modal(&mut self) {
@@ -1180,6 +1269,9 @@ impl App {
                 self.active_modal = ActiveModal::None;
                 true
             }
+            ActiveModal::SelectSession => {
+                self.handle_session_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()))
+            }
             ActiveModal::None => {
                 self.show_key_modal = false;
                 true
@@ -1198,10 +1290,80 @@ impl App {
             ActiveModal::ConfigDashboard => self.handle_config_dashboard_key(key),
             ActiveModal::SelectTheme => self.handle_theme_key(key),
             ActiveModal::Help => self.handle_help_key(key),
+            ActiveModal::SelectSession => self.handle_session_key(key),
             ActiveModal::None => {
                 self.show_key_modal = false;
                 false
             }
+        }
+    }
+
+    fn handle_session_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.show_key_modal = false;
+                self.active_modal = ActiveModal::None;
+                false
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if !self.sessions_list.is_empty() {
+                    if self.selected_session_index > 0 {
+                        self.selected_session_index -= 1;
+                    } else {
+                        self.selected_session_index = self.sessions_list.len().saturating_sub(1);
+                    }
+                }
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if !self.sessions_list.is_empty() {
+                    if self.selected_session_index + 1 < self.sessions_list.len() {
+                        self.selected_session_index += 1;
+                    } else {
+                        self.selected_session_index = 0;
+                    }
+                }
+                false
+            }
+            KeyCode::Enter => {
+                if let Some(target) = self.sessions_list.get(self.selected_session_index).cloned() {
+                    self.show_key_modal = false;
+                    self.active_modal = ActiveModal::None;
+                    if target.session_id == self.current_session_id {
+                        self.action_msg = Some(format!("already on active session: {}", target.session_id));
+                    } else {
+                        self.persist_current_session();
+                        match self.load_session_by_id(&target.session_id) {
+                            Ok((m_count, f_count)) => {
+                                self.current_session_id = target.session_id.clone();
+                                self.action_msg = Some(format!("switched to session: {}", target.title));
+                                self.chat_messages.push(ChatMessage::Agent {
+                                    sender: "orchestrator".to_string(),
+                                    text: format!(
+                                        "✓ **Session Loaded**: Switched to **{}** (`{}`).\n\
+                                         Restored **{}** messages and **{}** findings.",
+                                        target.title, target.session_id, m_count, f_count
+                                    ),
+                                });
+                            }
+                            Err(e) => {
+                                self.action_msg = Some(format!("failed to load session: {e}"));
+                            }
+                        }
+                    }
+                } else {
+                    self.show_key_modal = false;
+                    self.active_modal = ActiveModal::None;
+                }
+                false
+            }
+            KeyCode::Char('n') => {
+                self.show_key_modal = false;
+                self.active_modal = ActiveModal::None;
+                self.start_new_session();
+                false
+            }
+            _ => false,
         }
     }
 
@@ -2056,56 +2218,7 @@ impl App {
             } else if input == "/pause" || input == "pause" {
                 self.toggle_pause_total();
             } else if input == "/sessions" || input == "sessions" || input == "/sessions list" {
-                self.persist_current_session();
-                let proj_id = self.target_dir.display().to_string();
-                if let Ok(store) = StateStore::for_project(&self.target_dir) {
-                    match store.list_sessions(&proj_id) {
-                        Ok(summaries) => {
-                            if summaries.is_empty() {
-                                self.chat_messages.push(ChatMessage::Agent {
-                                    sender: "orchestrator".to_string(),
-                                    text: format!(
-                                        "### 🗂️ Asterisk Audit & Chat Sessions\n\n\
-                                         • **Current Active Session**: `{}`\n\
-                                         No prior archived sessions found in SQLite database.\n\
-                                         Use `/new` to archive this session and start fresh.",
-                                        self.current_session_id
-                                    ),
-                                });
-                            } else {
-                                let mut table = format!(
-                                    "### 🗂️ Asterisk Audit & Chat Sessions\n\n\
-                                     | Session ID | Created | Provider | Msgs | Issues | Status |\n\
-                                     | :--- | :--- | :--- | :---: | :---: | :--- |\n"
-                                );
-                                for s in &summaries {
-                                    let is_active = s.session_id == self.current_session_id;
-                                    let status = if is_active { "🟢 **Active**" } else { "Saved" };
-                                    let time_str = chrono::DateTime::from_timestamp_millis(s.created_at)
-                                        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-                                        .unwrap_or_else(|| "Unknown".to_string());
-                                    table.push_str(&format!(
-                                        "| `{}` | {} | {} | {} | {} | {} |\n",
-                                        s.session_id, time_str, s.active_provider, s.message_count, s.findings_count, status
-                                    ));
-                                }
-                                table.push_str(
-                                    "\n**Session Commands:**\n\
-                                     • `/sessions <session_id>` — Switch to a past session and resume chat & findings\n\
-                                     • `/new` — Initialize a fresh session and archive current workspace state"
-                                );
-                                self.chat_messages.push(ChatMessage::Agent {
-                                    sender: "orchestrator".to_string(),
-                                    text: table,
-                                });
-                            }
-                            self.action_msg = Some(format!("listed {} sessions", summaries.len()));
-                        }
-                        Err(e) => {
-                            self.action_msg = Some(format!("failed to list sessions: {e}"));
-                        }
-                    }
-                }
+                self.open_sessions_modal();
             } else if let Some(target_sess) = input.strip_prefix("/sessions ").or_else(|| input.strip_prefix("/session ")) {
                 let target_id = target_sess.trim().trim_matches('`').to_string();
                 if target_id == self.current_session_id {
@@ -2138,34 +2251,7 @@ impl App {
                     }
                 }
             } else if input == "/new" || input == "new" || input == "/new session" {
-                self.persist_current_session();
-                let old_id = self.current_session_id.clone();
-                let new_id = format!("sess-{}", chrono::Utc::now().timestamp_millis());
-                self.current_session_id = new_id.clone();
-                self.chat_messages.clear();
-                self.findings.clear();
-                self.patches.clear();
-                self.nodes_info.clear();
-                self.flow = Flow::new();
-                self.is_grill_mode = false;
-                self.grill_step = 0;
-                self.grill_answers.clear();
-                self.action_msg = Some("new session initialized".to_string());
-                self.chat_messages.push(ChatMessage::Agent {
-                    sender: "orchestrator".to_string(),
-                    text: format!(
-                        "### ✻ Asterisk — New Security Session Initialized\n\n\
-                         • **Session ID**: `{}`\n\
-                         • **Archived Previous Session**: `{}`\n\
-                         • **Target Directory**: `{}`\n\
-                         • **Active Model**: {} (`{}`)\n\n\
-                         The previous session was automatically persisted to SQLite. Type `/sessions` to switch back anytime.\n\
-                         Ready for autonomous vulnerability triage, AST dataflow analysis, or conversational security review.\n\
-                         Type `/scan` or press `[Space]` to begin an audit.",
-                        new_id, old_id, self.target_dir.display(), self.active_provider.name(), self.config.get_model()
-                    ),
-                });
-                self.persist_current_session();
+                self.start_new_session();
             } else if input == "/grill-me" || input == "grill-me" {
                 self.is_grill_mode = true;
                 self.grill_step = 1;
@@ -2706,21 +2792,63 @@ impl App {
                             return;
                         }
                     }
-                    for (preset, rect) in &modal_targets.model_preset_buttons {
-                        if in_rect(*rect, col, row) {
-                            self.config.provider = self.active_provider;
-                            self.config.model = Some(preset.clone());
-                            self.model_modal_input = preset.clone();
-                            if self.config.requires_api_key() && !self.config.is_api_key_configured() {
-                                self.open_key_modal();
-                            } else {
-                                let _ = self.config.save();
-                                self.show_key_modal = false;
-                                self.active_modal = ActiveModal::None;
-                                self.action_msg = Some(format!("model selected: {preset} ({})", self.active_provider.name()));
+                    let mut clicked_session = None;
+                    let mut clicked_model = None;
+                    if self.active_modal == ActiveModal::SelectSession {
+                        for (preset, rect) in &modal_targets.model_preset_buttons {
+                            if in_rect(*rect, col, row) {
+                                clicked_session = Some(preset.clone());
+                                break;
                             }
-                            return;
                         }
+                    } else {
+                        for (preset, rect) in &modal_targets.model_preset_buttons {
+                            if in_rect(*rect, col, row) {
+                                clicked_model = Some(preset.clone());
+                                break;
+                            }
+                        }
+                    }
+
+                    if let Some(sess_id) = clicked_session {
+                        if sess_id == self.current_session_id {
+                            self.action_msg = Some(format!("already on session: {sess_id}"));
+                        } else {
+                            self.persist_current_session();
+                            match self.load_session_by_id(&sess_id) {
+                                Ok((m_count, f_count)) => {
+                                    self.action_msg = Some(format!("switched to session: {sess_id}"));
+                                    self.chat_messages.push(ChatMessage::Agent {
+                                        sender: "orchestrator".to_string(),
+                                        text: format!(
+                                            "✓ **Session Loaded**: Switched to session `{sess_id}`.\n\
+                                             Restored **{m_count}** messages and **{f_count}** findings."
+                                        ),
+                                    });
+                                }
+                                Err(e) => {
+                                    self.action_msg = Some(format!("failed to load session: {e}"));
+                                }
+                            }
+                        }
+                        self.show_key_modal = false;
+                        self.active_modal = ActiveModal::None;
+                        return;
+                    }
+
+                    if let Some(preset) = clicked_model {
+                        self.config.provider = self.active_provider;
+                        self.config.model = Some(preset.clone());
+                        self.model_modal_input = preset.clone();
+                        if self.config.requires_api_key() && !self.config.is_api_key_configured() {
+                            self.open_key_modal();
+                        } else {
+                            let _ = self.config.save();
+                            self.show_key_modal = false;
+                            self.active_modal = ActiveModal::None;
+                            self.action_msg = Some(format!("model selected: {preset} ({})", self.active_provider.name()));
+                        }
+                        return;
                     }
                 }
             }
@@ -3099,6 +3227,15 @@ impl App {
                 ActiveModal::Help => {
                     ModalView::render_help_modal(f, area);
                     ModalClickTargets::default()
+                }
+                ActiveModal::SelectSession => {
+                    ModalView::render_session_list(
+                        f,
+                        area,
+                        &self.sessions_list,
+                        self.selected_session_index,
+                        &self.current_session_id,
+                    )
                 }
                 ActiveModal::None => crate::ui::views::modal_view::ModalClickTargets {
                     provider_buttons: Vec::new(),

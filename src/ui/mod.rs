@@ -5,5 +5,6 @@ pub mod markdown;
 pub mod theme;
 pub mod views;
 
-pub use app::App;
+#[allow(unused_imports)]
+pub use app::{ActiveModal, App};
 
